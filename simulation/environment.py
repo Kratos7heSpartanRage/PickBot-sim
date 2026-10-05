@@ -1,7 +1,6 @@
 import pybullet as p
 import pybullet_data
 import numpy as np
-import time
 
 from .camera import OverheadCamera
 from .object_spawner import ObjectSpawner
@@ -10,10 +9,10 @@ from .robot import FrankaPandaRobot
 
 class GraspingEnvironment:
     """
-    PyBullet Simulated Picking Environment.
-    Enhanced with better lighting, textures, workspace markers, and tray.
+    Clean PyBullet simulation environment for robotic grasping.
+    Dark industrial table, simple workspace boundary, no text clutter.
     """
-    def __init__(self, gui=False):
+    def __init__(self, gui=False, **kwargs):
         self.gui = gui
         connection_mode = p.GUI if self.gui else p.DIRECT
         self.client_id = p.connect(connection_mode)
@@ -24,76 +23,83 @@ class GraspingEnvironment:
 
         if self.gui:
             p.resetDebugVisualizerCamera(
-                cameraDistance=1.5,
+                cameraDistance=1.4,
                 cameraYaw=50.0,
-                cameraPitch=-40.0,
-                cameraTargetPosition=[0.45, 0.0, 0.15]
+                cameraPitch=-35.0,
+                cameraTargetPosition=[0.45, 0.0, 0.12]
             )
-            # Enable GUI panel for sliders and buttons
             p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1)
             p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 1)
             p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
             p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
             p.configureDebugVisualizer(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
 
-        # Load environment assets
+        # Dark floor
         self.plane_id = p.loadURDF("plane.urdf", [0, 0, -0.65])
-        self.table_id = p.loadURDF("table/table.urdf", [0.5, 0.0, -0.65])
+        p.changeVisualShape(self.plane_id, -1, rgbaColor=[0.20, 0.22, 0.25, 1.0])
 
-        # Add a tray on the side for collecting objects
+        # Dark matte table
+        self.table_id = p.loadURDF("table/table.urdf", [0.5, 0.0, -0.65])
+        p.changeVisualShape(self.table_id, -1, rgbaColor=[0.18, 0.19, 0.22, 1.0])
+
+        # Collection tray
         try:
-            self.tray_id = p.loadURDF("tray/traybox.urdf", [0.5, 0.35, 0.0], globalScaling=0.6)
+            self.tray_id = p.loadURDF("tray/traybox.urdf", [0.5, 0.40, 0.0], globalScaling=0.55)
+            p.changeVisualShape(self.tray_id, -1, rgbaColor=[0.28, 0.30, 0.33, 1.0])
         except Exception:
             self.tray_id = None
 
-        # Warm table surface color
-        p.changeVisualShape(self.table_id, -1, rgbaColor=[0.6, 0.55, 0.5, 1.0])
-
-        # Draw workspace boundaries in GUI
+        # Clean workspace boundary
         if self.gui:
-            self._draw_workspace_bounds()
+            self._draw_workspace()
 
-        # Initialize robot arm
+        # Robot arm
         self.robot = FrankaPandaRobot(base_pos=(0.0, 0.0, 0.0))
 
-        # Initialize overhead camera
+        # Overhead camera
         self.camera = OverheadCamera(
             target_pos=(0.5, 0.0, 0.0),
             camera_pos=(0.5, 0.0, 0.85),
             img_size=(300, 300)
         )
 
-        # Initialize object spawner on table
+        # Object spawner
         self.spawner = ObjectSpawner(
-            workspace_bounds=((0.38, 0.62), (-0.18, 0.18)),
+            workspace_bounds=((0.35, 0.65), (-0.20, 0.20)),
             table_height=0.0
         )
 
-    def _draw_workspace_bounds(self):
-        """Draw visual workspace boundary markers in the simulation."""
-        x_lo, x_hi = 0.38, 0.62
-        y_lo, y_hi = -0.18, 0.18
+    def _draw_workspace(self):
+        """Draw a clean, thin workspace boundary rectangle."""
+        x0, x1 = 0.35, 0.65
+        y0, y1 = -0.20, 0.20
         z = 0.002
-        color = [0.2, 0.8, 0.2]
-        width = 2.0
-        p.addUserDebugLine([x_lo, y_lo, z], [x_hi, y_lo, z], lineColorRGB=color, lineWidth=width, lifeTime=0)
-        p.addUserDebugLine([x_hi, y_lo, z], [x_hi, y_hi, z], lineColorRGB=color, lineWidth=width, lifeTime=0)
-        p.addUserDebugLine([x_hi, y_hi, z], [x_lo, y_hi, z], lineColorRGB=color, lineWidth=width, lifeTime=0)
-        p.addUserDebugLine([x_lo, y_hi, z], [x_lo, y_lo, z], lineColorRGB=color, lineWidth=width, lifeTime=0)
-        p.addUserDebugText("WORKSPACE", [0.50, -0.21, z + 0.01], textColorRGB=[0.2, 0.8, 0.2], textSize=1.0)
+        color = [0.0, 0.70, 0.90]
+        w = 2.0
 
-    def reset(self, num_objects=3):
-        """Resets robot to home and spawns randomized objects."""
+        p.addUserDebugLine([x0, y0, z], [x1, y0, z], lineColorRGB=color, lineWidth=w, lifeTime=0)
+        p.addUserDebugLine([x1, y0, z], [x1, y1, z], lineColorRGB=color, lineWidth=w, lifeTime=0)
+        p.addUserDebugLine([x1, y1, z], [x0, y1, z], lineColorRGB=color, lineWidth=w, lifeTime=0)
+        p.addUserDebugLine([x0, y1, z], [x0, y0, z], lineColorRGB=color, lineWidth=w, lifeTime=0)
+
+        p.addUserDebugText(
+            "WORKSPACE",
+            [0.50, -0.23, z + 0.003],
+            textColorRGB=[0.0, 0.60, 0.80],
+            textSize=0.9
+        )
+
+    def reset(self, num_objects=3, **kwargs):
+        """Resets robot and spawns objects."""
         self.robot.reset()
-        spawned_ids = self.spawner.spawn_random_objects(num_objects=num_objects)
-        return spawned_ids
+        return self.spawner.spawn_random_objects(num_objects=num_objects)
 
     def get_observation(self):
         """Captures overhead RGB, metric Depth, and segmentation mask."""
         return self.camera.capture()
 
     def get_ground_truth_grasps(self):
-        """Returns ground-truth Grasp objects for all currently spawned objects."""
+        """Returns ground-truth Grasp objects for spawned objects."""
         return self.spawner.get_ground_truth_grasps(self.camera)
 
     def step(self):

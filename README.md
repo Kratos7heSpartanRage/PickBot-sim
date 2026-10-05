@@ -44,11 +44,12 @@
   - Produces pixel-wise heatmaps: grasp quality `Q(u,v)`, orientation angle `θ(u,v)`, and gripper width `W(u,v)`
   - GPU-accelerated inference at **~40 FPS** on NVIDIA RTX 3050 (~25ms latency)
 
-- **Diverse Object Simulation**
-  - 9+ named URDF objects: lego bricks, mugs, ducks, teddy bears, soccerballs, dominos, jenga blocks, cubes
-  - 30 random mesh shapes from PyBullet's `random_urdfs` collection (1000 available)
-  - Procedural primitives: boxes, cylinders, bars, spheres, capsules
-  - Vibrant 10-color palette with collision-aware placement
+- **Diverse Grasp-Calibrated Object Library**
+  - Grasp-optimized shapes with dimensions strictly calibrated for Franka Panda's parallel jaws (25mm–55mm grasp span)
+  - Multi-body composite parts with dual-tone accent materials: Machined Blocks, T-Brackets, L-Brackets, Beverage/Oil Cans with caps, Handheld Smart Scanners, Tool Grips, Hex Spacers, and Dual-Tone Capsules
+  - Curated PyBullet URDF objects: Lego bricks, Dominoes, Jenga blocks, Small Cubes, Mugs, and Industrial Mesh Parts
+  - 4 Designer Color Themes: Cyber-Neon, Industrial Pro, Studio Vibrant, and Nordic Matte
+  - Tuned contact physics (`lateralFriction=1.35`, `restitution=0.02`) for zero-slip, rock-solid grip closure
 
 - **3D World Deprojection**
   - Pinhole camera intrinsic matrix converts 2D pixel coordinates `(u, v)` + metric depth → 3D Cartesian coordinates `(X, Y, Z)` in robot frame
@@ -274,32 +275,47 @@ Cyber Physical Systems/
   | `--continuous` | Run real-time perception loop with live dashboard |
   | `--checkpoint PATH` | Path to model weights file |
 
-### Interactive Playground
+### Interactive Playground v2.0
 
-- **Launch the interactive playground:**
+- **Launch the redesigned interactive playground:**
   ```bash
-  python playground.py --num-objects 5
+  python playground.py --num-objects 4 --theme cyber
   ```
 
-- **PyBullet GUI Controls (right-side panel):**
-  - `Robot X / Y / Z` — move the robot arm end-effector in real time
-  - `Gripper Yaw (deg)` — rotate the gripper orientation
-  - `Num Objects (respawn)` — set the object count for the next respawn
+- **Holographic 3D In-Scene Status HUD (Organized Typography):**
+  - Clean billboard panel aligned at the back of the table showing:
+    - `=== PICKBOT ROBOTIC CELL v2.0 ===` (Header banner)
+    - `STATUS: [ READY // AWAITING COMMAND ]` (Dynamic multi-color state indicator)
+    - `SCENE: N Objects | THEME: [CYBER / INDUSTRIAL / STUDIO / NORDIC]`
+    - `TARGET: [X, Y, Z]m | Q: Score | Yaw: Angle` (Target grasp telemetry)
+    - `PICKS: Success / Attempts (%) | Controller telemetry`
+
+- **Organized PyBullet GUI Controls (Right-Side Panel):**
+  - `1-4. Robot X / Y / Z / Yaw` — real-time Cartesian positioning & gripper orientation
+  - `5. Object Count (1..8)` — target number of objects for next respawn
+  - `6. Theme (0:Cyber, 1:Industrial, 2:Studio, 3:Nordic)` — color palette selector
+  - `7. Cam Preset (1:Iso, 2:Top, 3:Front, 4:Side)` — dynamic camera viewpoint switcher
 
 - **Action Buttons:**
-  - `DETECT GRASPS` — runs CNN inference on the current scene, draws grasp markers in 3D, updates OpenCV dashboard
-  - `EXECUTE TOP GRASP` — performs a full 5-phase pick sequence (approach → descend → close gripper → lift → drop in tray)
-  - `RESPAWN OBJECTS` — clears the scene and spawns new randomized objects
-  - `RESET ROBOT` — returns the robot arm to its home position
+  - `>> [1] DETECT GRASPS (CNN) <<` — runs GG-CNN inference, draws 3D grasp vectors, updates dashboard
+  - `>> [2] EXECUTE PICK & PLACE <<` — automated 5-phase approach, descent, grip (45N), lift, transfer to tray, and deposit
+  - `>> [3] RESPAWN OBJECTS <<` — clears workcell and spawns fresh grasp-calibrated parts with active theme
+  - `>> [4] RESET ROBOT HOME <<` — returns Franka Panda arm to neutral rest posture
 
-- **OpenCV Dashboard Window:**
-  - Displays a 4-panel view: RGB with grasp overlays, depth field, quality heatmap, angle map
-  - Updates each time DETECT GRASPS is clicked
+- **Cyber-Industrial OpenCV Perception Dashboard Window:**
+  - Displays high-definition 4-panel telemetry:
+    - Panel 1: RGB Perception & Predicted Grasps with parallel contact jaw lines and Top-1 score tag
+    - Panel 2: Metric Depth Field with Turbo colormap and depth distance range badge
+    - Panel 3: CNN Grasp Quality Heatmap Q(u, v) with labeled local maxima peaks (#1, #2, #3)
+    - Panel 4: Gripper Orientation Map θ(u, v) with HSV angle field
+  - Top HUD Header with live pill badges (`STATUS`, `DEVICE`, `LATENCY`, `BEST Q`, `TARGETS`)
+  - Interactive hotkeys: `[D]` Detect, `[Space]` Pick & Place, `[R]` Respawn, `[Q]` Exit
 
 - **Playground CLI flags:**
   | Flag | Description |
   |------|-------------|
   | `--num-objects N` | Initial number of objects (1–8) |
+  | `--theme THEME` | Color palette theme (`cyber`, `industrial`, `studio`, `nordic`) |
   | `--no-dashboard` | Disable the OpenCV dashboard window |
   | `--checkpoint PATH` | Path to model weights file |
 
