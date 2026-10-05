@@ -129,6 +129,9 @@ class GraspDetector:
             world_pt = None
             if camera is not None:
                 world_pt = camera.deproject_pixel_to_world(c, r, d_val)
+                # Ensure grasp is within active workspace table boundary
+                if not (0.30 <= world_pt[0] <= 0.70 and -0.25 <= world_pt[1] <= 0.25):
+                    continue
 
             grasps.append(Grasp(
                 center_px=(c, r),
