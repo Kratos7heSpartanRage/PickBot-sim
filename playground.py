@@ -25,6 +25,8 @@ import cv2
 from simulation.environment import GraspingEnvironment
 from perception.detector import GraspDetector
 from perception.visualizer import Visualizer
+from perception.dashboard import DashboardWindow
+from simulation.grasp_executor import GraspExecutor
 
 
 class InteractivePlayground:
@@ -49,6 +51,7 @@ class InteractivePlayground:
         print(f"[2/3] Loading GG-CNN model: {ckpt}")
         self.detector = GraspDetector(checkpoint_path=ckpt)
         self.visualizer = Visualizer()
+        self.dashboard = DashboardWindow(title="CPS Grasp Detection Dashboard", size=(800, 500)) if self.show_dashboard else None
 
         # 3. Spawn objects
         print(f"[3/3] Spawning {self.num_objects} objects...")
@@ -409,142 +412,27 @@ class InteractivePlayground:
             cv2.waitKey(1)
 
     def execute_grasp(self):
-        """Execute grasp at the selected grasp point with live force display."""
-        if not self.filtered_grasps:
-            print("\n  ⚠  No grasp points! Click SHOW GRASP POINTS first.")
-            self._update_status("No grasp points! Click SHOW GRASP POINTS first.", [1.0, 0.4, 0.1])
+        """Execute a full pick sequence using GraspExecutor."""
+        if not self.last_grasps:
+            print("\n[Execute] No grasps detected yet! Run DETECT GRASPS first.")
             return
 
-        sel_idx = int(round(p.readUserDebugParameter(self.slider_sel_grasp))) - 1
-        sel_idx = max(0, min(sel_idx, len(self.filtered_grasps) - 1))
-
-        grasp = self.filtered_grasps[sel_idx]
-        if grasp.world_coords is None:
-            print("\n  ⚠  Selected grasp has no 3D position!")
+        top = self.last_grasps[0]
+        if top.world_coords is None:
+            print("\n[Execute] Top grasp has no 3D coordinates!")
             return
 
         self.grasp_attempts += 1
-        wx, wy, wz = grasp.world_coords
-        yaw = grasp.angle_rad
-
-        # Use actual object Z for reliable descent height
-        actual_z = self._find_nearest_object_z(wx, wy)
-
-        print(f"\n{'═' * 60}")
-        print(f"  Grasp #{self.grasp_attempts} │ Point #{sel_idx + 1}")
-        print(f"{'─' * 60}")
-        print(f"  Target     : [{wx:.3f}, {wy:.3f}, {actual_z:.3f}] m")
-        print(f"  Quality    : {grasp.quality:.3f}")
-        print(f"  Angle      : {grasp.angle_deg:+.1f}°")
-        print()
-
-        # Phase 1: Approach — hover above the object
-        approach_z = actual_z + 0.14
-        self._update_status("Phase 1/4: Approaching target...", [1.0, 0.85, 0.1])
-        print(f"  Phase 1 │ Approach → Z = {approach_z:.3f} m")
-        self.env.robot.move_to_cartesian([wx, wy, approach_z], target_yaw=yaw, steps=100)
-        for _ in range(25):
-            self.env.step()
-
-        # Phase 2: Descend — lower to just above the object surface
-        grasp_z = actual_z + 0.015
-        self._update_status("Phase 2/4: Descending to object...", [1.0, 0.70, 0.1])
-        print(f"  Phase 2 │ Descend → Z = {grasp_z:.3f} m")
-        self.env.robot.move_to_cartesian([wx, wy, grasp_z], target_yaw=yaw, steps=80)
-        for _ in range(40):
-            self.env.step()
-
-        # Phase 3: Close gripper with force monitoring
-        self._update_status("Phase 3/4: Closing gripper...", [0.0, 0.85, 1.0])
-        print(f"  Phase 3 │ Closing gripper (monitoring force)...")
-        for g_idx in self.env.robot.gripper_joints:
-            p.setJointMotorControl2(
-                self.env.robot.robot_id, g_idx,
-                p.POSITION_CONTROL, targetPosition=0.0, force=45.0
-            )
-
-        max_grip_force = 0.0
-        for step in range(100):
-            self.env.step()
-            if step % 5 == 0:
-                force = self._measure_grip_force()
-                max_grip_force = max(max_grip_force, force)
-                self._show_force(wx, wy, actual_z, force, label="GRIP")
-
-        print(f"          │ Peak grip force : {max_grip_force:.1f} N")
-
-        # Phase 4: Lift
-        lift_z = actual_z + 0.22
-        self._update_status(f"Phase 4/4: Lifting (Force: {max_grip_force:.1f}N)...", [0.7, 0.3, 1.0])
-        print(f"  Phase 4 │ Lift     → Z = {lift_z:.3f} m")
-        self.env.robot.move_to_cartesian([wx, wy, lift_z], target_yaw=yaw, steps=100)
-
-        max_lift_force = 0.0
-        for step in range(80):
-            self.env.step()
-            if step % 5 == 0:
-                force = self._measure_grip_force()
-                max_lift_force = max(max_lift_force, force)
-                self._show_force(wx, wy, lift_z, force, label="LIFT")
-
-        print(f"          │ Peak lift force : {max_lift_force:.1f} N")
-        print()
-
-        # Check success — any object raised above 0.09m
-        grasped = False
-        grasped_name = ""
-        for data in self.env.spawner.object_data:
-            try:
-                pos, _ = p.getBasePositionAndOrientation(data["id"])
-                if pos[2] > 0.09:
-                    grasped = True
-                    grasped_name = data["name"]
-                    break
-            except Exception:
-                pass
-
-        if grasped:
+        print(f"\n[Execute Grasp #{self.grasp_attempts}]")
+        
+        executor = GraspExecutor(self.env, verbose=True)
+        result = executor.execute(top, place_in_tray=True, go_home=True)
+        
+        if result["success"]:
             self.successful_grasps += 1
-            print(f"  Result  │ ✓ SUCCESS — {grasped_name} lifted!")
-            print(f"          │ Grip: {max_grip_force:.1f} N  │  Lift: {max_lift_force:.1f} N")
-            self._update_status(
-                f"SUCCESS! Grip: {max_grip_force:.1f}N, Lift: {max_lift_force:.1f}N",
-                [0.0, 1.0, 0.3]
-            )
-
-            # Transfer to tray
-            print(f"          │ Transferring to collection tray...")
-            self.env.robot.move_to_cartesian([0.50, 0.40, 0.22], target_yaw=0.0, steps=100)
-            for _ in range(30):
-                self.env.step()
-
-            # Release
-            for g_idx in self.env.robot.gripper_joints:
-                p.setJointMotorControl2(
-                    self.env.robot.robot_id, g_idx,
-                    p.POSITION_CONTROL, targetPosition=0.04, force=20.0
-                )
-            for _ in range(40):
-                self.env.step()
-        else:
-            print(f"  Result  │ ✗ MISS — object not grasped")
-            print(f"          │ Grip: {max_grip_force:.1f} N (insufficient contact)")
-            self._update_status(
-                f"MISS — Grip: {max_grip_force:.1f}N (insufficient contact)",
-                [1.0, 0.3, 0.1]
-            )
-
+            
         rate = 100 * self.successful_grasps / max(1, self.grasp_attempts)
-        print(f"{'─' * 60}")
-        print(f"  Stats   │ {self.successful_grasps}/{self.grasp_attempts} successful ({rate:.0f}%)")
-        print(f"{'═' * 60}")
-
-        # Return home
-        print("\n  Returning robot to home position...")
-        self.env.robot.reset()
-        for _ in range(30):
-            self.env.step()
-        self._clear_force_text()
+        print(f"  Stats: {self.successful_grasps}/{self.grasp_attempts} successful grasps ({rate:.0f}%)")
 
     def respawn_objects(self):
         """Clear and respawn with current slider count."""
@@ -625,8 +513,7 @@ class InteractivePlayground:
 
                 self.env.step()
 
-                if self.show_dashboard:
-                    cv2.waitKey(1)
+
 
                 time.sleep(0.005)
 

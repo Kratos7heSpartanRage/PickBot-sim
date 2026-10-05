@@ -91,6 +91,12 @@ class Grasp:
             angle_diff = 180.0 - angle_diff
         return (iou >= iou_thresh) and (angle_diff <= angle_thresh_deg)
 
+    @property
+    def gripper_yaw(self):
+        """Yaw command for FrankaPandaRobot (image angle -> world jaw axis)."""
+        from simulation.grasp_executor import image_angle_to_gripper_yaw
+        return image_angle_to_gripper_yaw(self.angle_rad)
+
     def __repr__(self):
         w_str = f"[{self.world_coords[0]:.3f}, {self.world_coords[1]:.3f}, {self.world_coords[2]:.3f}]" if self.world_coords is not None else "None"
         return f"Grasp(u={self.u:.1f}, v={self.v:.1f}, score={self.quality:.3f}, angle={self.angle_deg:.1f}deg, width={self.width_px:.1f}px, world={w_str})"

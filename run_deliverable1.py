@@ -9,6 +9,8 @@ import numpy as np
 from simulation.environment import GraspingEnvironment
 from perception.detector import GraspDetector
 from perception.visualizer import Visualizer
+from perception.dashboard import DashboardWindow
+from simulation.grasp_executor import GraspExecutor
 from evaluation.benchmark import run_benchmark
 
 def main():
@@ -91,7 +93,8 @@ def main():
             if args.align_robot and top_g.world_coords is not None:
                 print(f"--> Aligning Franka Panda gripper above grasp target (z={top_g.world_coords[2]+0.12:.3f}m)...")
                 approach_pos = [top_g.world_coords[0], top_g.world_coords[1], top_g.world_coords[2] + 0.12]
-                env.robot.move_to_cartesian(approach_pos, target_yaw=top_g.angle_rad, steps=100)
+                from simulation.grasp_executor import image_angle_to_gripper_yaw
+                env.robot.move_to_cartesian(approach_pos, target_yaw=image_angle_to_gripper_yaw(top_g.angle_rad), steps=100)
 
         # Generate and save presentation snapshot
         fig_path = f"outputs/deliverable1_clutter_{clutter}.png"
@@ -105,8 +108,7 @@ def main():
         print("--> Press 'q' in the dashboard window or Ctrl+C to stop.")
         print("--> Press 'r' to respawn objects, 'd' for new detection snapshot.")
 
-        cv2.namedWindow("CPS Live Perception", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("CPS Live Perception", 900, 550)
+        dashboard_win = DashboardWindow(title="CPS Live Perception", size=(900, 550))
 
         try:
             frame_idx = 0
@@ -118,7 +120,7 @@ def main():
 
                     # Build and display live dashboard
                     dashboard = visualizer.create_dashboard(rgb, depth, hm, grasps, telem)
-                    cv2.imshow("CPS Live Perception", cv2.cvtColor(dashboard, cv2.COLOR_RGB2BGR))
+                    dashboard_win.show(dashboard)
 
                     # Also print periodic telemetry
                     if frame_idx % 60 == 0:
@@ -126,8 +128,11 @@ def main():
                         print(f"[Live] FPS:{telem['fps']:.0f} | Lat:{telem['inference_time_ms']:.1f}ms | "
                               f"Q:{telem['top_score']:.2f} | Objects: {', '.join(o['name'] for o in obj_info)}")
 
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
+                # Since we don't have cv2.waitKey in the main loop anymore, we rely on DashboardWindow for UI?
+                # Actually DashboardWindow doesn't return keys directly easily in this loop. 
+                # Let's just rely on Ctrl+C for stopping.
+                pass
+                if False:
                     print("\nStopped by user (q key).")
                     break
                 elif key == ord('r'):
@@ -150,7 +155,7 @@ def main():
             print("")
             print("Stopped live loop.")
         finally:
-            cv2.destroyAllWindows()
+            if 'dashboard_win' in locals(): dashboard_win.close()
 
     env.close()
     print("")

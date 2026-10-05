@@ -123,7 +123,11 @@ class GraspDetector:
             score = float(q_smooth[r, c])
             angle = float(ang_map[r, c])
             w_px = float(width_map[r, c])
-            d_val = float(depth[r, c])
+            # Height of the object's top surface around the peak (a peak on an
+            # object edge would otherwise read the table depth behind it)
+            r0, r1 = max(0, r - 3), min(depth.shape[0], r + 4)
+            c0, c1 = max(0, c - 3), min(depth.shape[1], c + 4)
+            d_val = float(depth[r0:r1, c0:c1].min())
 
             # Deproject to 3D world coordinates if camera is provided
             world_pt = None
