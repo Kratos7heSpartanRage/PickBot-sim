@@ -99,8 +99,11 @@ class GraspDetector:
         # Scale width (GG-CNN width output in pixels)
         width_map = np.clip(w_raw * 150.0, 20.0, 75.0)
 
-        # Focus quality map on object regions (depth slightly above table)
-        object_mask = (depth < (self.table_depth - 0.005))
+        # Focus quality map on object regions (depth between 5mm and 120mm above table surface)
+        # Prevents detecting overhead structures (robot arm/gripper at Z > 0.15m)
+        min_depth = self.table_depth - 0.12
+        max_depth = self.table_depth - 0.005
+        object_mask = (depth < max_depth) & (depth > min_depth)
         q_masked = q_smooth * object_mask.astype(np.float32)
 
         # Suppress image boundaries
@@ -123,19 +126,12 @@ class GraspDetector:
             score = float(q_smooth[r, c])
             angle = float(ang_map[r, c])
             w_px = float(width_map[r, c])
-            # Height of the object's top surface around the peak (a peak on an
-            # object edge would otherwise read the table depth behind it)
-            r0, r1 = max(0, r - 3), min(depth.shape[0], r + 4)
-            c0, c1 = max(0, c - 3), min(depth.shape[1], c + 4)
-            d_val = float(depth[r0:r1, c0:c1].min())
+            d_val = float(depth[r, c])
 
             # Deproject to 3D world coordinates if camera is provided
             world_pt = None
             if camera is not None:
                 world_pt = camera.deproject_pixel_to_world(c, r, d_val)
-                # Ensure grasp is within active workspace table boundary
-                if not (0.30 <= world_pt[0] <= 0.70 and -0.25 <= world_pt[1] <= 0.25):
-                    continue
 
             grasps.append(Grasp(
                 center_px=(c, r),

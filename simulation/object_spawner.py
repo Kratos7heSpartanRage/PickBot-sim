@@ -1,201 +1,405 @@
+"""
+=============================================================================
+  AI-Based Vision-Guided Robotic Grasping System: Deliverable 2
+  Environment & Scene Synthesis Subsystem: Object Spawner
+  Lead: Satyam Kumar
+=============================================================================
+Calibrated multi-object spawner enforcing hardware constraints of the Franka
+Panda 2-finger parallel jaw gripper (max stroke: 80 mm, finger height: ~20 mm):
+  - Graspable spans strictly calibrated to 25 mm - 60 mm.
+  - Curated library of 8 diverse objects (primitives + URDF meshes).
+  - High-friction contact physics (lateral=1.40, spinning=0.03, rolling=0.01).
+  - Multi-clutter spawning (Level 1, 3, 5) with collision-free placement.
+  - Floating 3D scene HUD labels for visual presentation.
+=============================================================================
+"""
+import os
+import random
 import numpy as np
 import pybullet as p
 import pybullet_data
-import random
-import os
 
 
 class ObjectSpawner:
     """
-    Simple Object Spawner with 5 clearly visible, well-defined dataset objects.
-    Each object is a real URDF from PyBullet's built-in dataset, scaled large
-    enough to be instantly recognizable in the 3D scene.
+    Curated, calibrated object spawner for Deliverable 2.
+    Spawns objects with strictly verified dimensions and tuned contact dynamics.
     """
-
-    # 5 Simple, Recognizable Objects from PyBullet Dataset
-    OBJECT_LIBRARY = [
-        {
-            "name": "Duck",
-            "urdf": "duck_vhacd.urdf",
-            "scale": 0.55,
-            "spawn_z": 0.08,
-            "color": [1.00, 0.85, 0.00, 1.0],   # Bright Yellow
-            "default_dims": (0.06, 0.05, 0.06),
-        },
-        {
-            "name": "Lego",
-            "urdf": "lego/lego.urdf",
-            "scale": 3.5,
-            "spawn_z": 0.04,
-            "color": [0.95, 0.15, 0.12, 1.0],   # Bright Red
-            "default_dims": (0.10, 0.05, 0.035),
-        },
-        {
-            "name": "Mug",
-            "urdf": "objects/mug.urdf",
-            "scale": 0.45,
-            "spawn_z": 0.06,
-            "color": [0.12, 0.50, 0.95, 1.0],   # Ocean Blue
-            "default_dims": (0.06, 0.06, 0.07),
-        },
-        {
-            "name": "Domino",
-            "urdf": "domino/domino.urdf",
-            "scale": 2.8,
-            "spawn_z": 0.03,
-            "color": [0.10, 0.90, 0.25, 1.0],   # Neon Green
-            "default_dims": (0.10, 0.05, 0.018),
-        },
-        {
-            "name": "Jenga",
-            "urdf": "jenga/jenga.urdf",
-            "scale": 2.0,
-            "spawn_z": 0.04,
-            "color": [0.75, 0.25, 0.95, 1.0],   # Electric Purple
-            "default_dims": (0.12, 0.04, 0.030),
-        },
-    ]
-
-    def __init__(self, workspace_bounds=((0.35, 0.65), (-0.20, 0.20)), table_height=0.0):
+    def __init__(self, workspace_bounds=((0.36, 0.64), (-0.18, 0.18)), table_height=0.0):
         self.x_bounds, self.y_bounds = workspace_bounds
         self.table_height = table_height
         self.spawned_ids = []
         self.object_data = []
-        self.label_ids = []  # 3D text labels above objects
+        self.hud_text_ids = []
         self.data_path = pybullet_data.getDataPath()
 
+        # Studio presentation palette (vibrant, high contrast against dark mat)
+        self.palette = [
+            [0.92, 0.22, 0.20, 1.0],   # Coral Red
+            [0.18, 0.55, 0.95, 1.0],   # Ocean Blue
+            [0.15, 0.85, 0.40, 1.0],   # Neon Green
+            [0.98, 0.78, 0.10, 1.0],   # Sunflower Gold
+            [0.72, 0.22, 0.92, 1.0],   # Vivid Purple
+            [0.08, 0.88, 0.92, 1.0],   # Electric Cyan
+            [0.98, 0.48, 0.12, 1.0],   # Tangerine Orange
+            [0.95, 0.28, 0.65, 1.0],   # Hot Pink
+        ]
+
+        # Curated catalog definitions conforming to Eval 2 Engineering Spec (Page 7)
+        self.catalog = [
+            {
+                "key": "cube",
+                "name": "Small Cube",
+                "type": "primitive_box",
+                "dims": (0.038, 0.038, 0.038),
+                "mass": 0.08,
+                "grasp_span": 0.038,
+            },
+            {
+                "key": "machined_bar",
+                "name": "Machined Bar",
+                "type": "primitive_box",
+                "dims": (0.055, 0.032, 0.025),
+                "mass": 0.12,
+                "grasp_span": 0.032,
+            },
+            {
+                "key": "cylinder",
+                "name": "Cylinder Can",
+                "type": "primitive_cylinder",
+                "dims": (0.044, 0.044, 0.055),  # dia=44mm, h=55mm
+                "mass": 0.10,
+                "grasp_span": 0.044,
+            },
+            {
+                "key": "l_bracket",
+                "name": "L-Bracket",
+                "type": "compound_l_bracket",
+                "dims": (0.050, 0.028, 0.040),  # span=50mm, thickness=28mm
+                "mass": 0.10,
+                "grasp_span": 0.028,
+            },
+            {
+                "key": "lego",
+                "name": "Calibrated Lego",
+                "type": "urdf",
+                "urdf_rel": "lego/lego.urdf",
+                "scale": 1.30,
+                "dims": (0.044, 0.044, 0.032),
+                "mass": 0.05,
+                "grasp_span": 0.044,
+            },
+            {
+                "key": "mug",
+                "name": "Calibrated Mug",
+                "type": "urdf",
+                "urdf_rel": "objects/mug.urdf",
+                "scale": 0.35,
+                "dims": (0.035, 0.049, 0.041),  # rim dia ~45mm
+                "mass": 0.15,
+                "grasp_span": 0.045,
+            },
+            {
+                "key": "domino",
+                "name": "Calibrated Domino",
+                "type": "urdf",
+                "urdf_rel": "domino/domino.urdf",
+                "scale": 1.00,
+                "dims": (0.051, 0.025, 0.007),
+                "mass": 0.06,
+                "grasp_span": 0.025,
+            },
+            {
+                "key": "duck",
+                "name": "Calibrated Duck",
+                "type": "urdf",
+                "urdf_rel": "duck_vhacd.urdf",
+                "scale": 0.40,
+                "dims": (0.041, 0.039, 0.031),
+                "mass": 0.08,
+                "grasp_span": 0.042,
+            },
+        ]
+
     def clear(self):
-        """Remove all spawned objects and labels."""
+        """Removes all spawned bodies and HUD text elements from the simulation."""
         for obj_id in self.spawned_ids:
             try:
                 p.removeBody(obj_id)
             except Exception:
                 pass
-        for label_id in self.label_ids:
-            try:
-                p.removeUserDebugItem(label_id)
-            except Exception:
-                pass
         self.spawned_ids.clear()
         self.object_data.clear()
-        self.label_ids.clear()
 
-    def _random_position(self, existing_positions, min_sep=0.16):
-        """Generate random position inside workspace with separation."""
-        for _ in range(100):
-            x = np.random.uniform(self.x_bounds[0] + 0.04, self.x_bounds[1] - 0.04)
-            y = np.random.uniform(self.y_bounds[0] + 0.04, self.y_bounds[1] - 0.04)
-            too_close = False
-            for ex, ey in existing_positions:
-                if np.sqrt((x - ex)**2 + (y - ey)**2) < min_sep:
-                    too_close = True
+        for txt_id in self.hud_text_ids:
+            try:
+                p.removeUserDebugItem(txt_id)
+            except Exception:
+                pass
+        self.hud_text_ids.clear()
+
+    def _get_clutter_min_sep(self, num_objects):
+        """Returns required center-to-center separation distance per clutter level."""
+        if num_objects <= 1:
+            return 0.0
+        elif num_objects <= 3:
+            return 0.14  # Eval 2 spec: Clutter Level 3 requires >= 14 cm
+        elif num_objects <= 5:
+            return 0.09  # Eval 2 spec: Clutter Level 5 requires >= 9 cm
+        else:
+            return 0.07
+
+    def _sample_positions(self, num_objects):
+        """Generates collision-free spawn positions respecting clutter constraints."""
+        positions = []
+        min_sep = self._get_clutter_min_sep(num_objects)
+
+        if num_objects == 1:
+            # Clutter Level 1: exactly 1 object spawned near workspace center [0.50, 0.00]
+            cx = 0.50 + np.random.uniform(-0.02, 0.02)
+            cy = 0.00 + np.random.uniform(-0.02, 0.02)
+            return [(cx, cy)]
+
+        for i in range(num_objects):
+            placed = False
+            for attempt in range(120):
+                x = np.random.uniform(self.x_bounds[0], self.x_bounds[1])
+                y = np.random.uniform(self.y_bounds[0], self.y_bounds[1])
+                too_close = False
+                for ex, ey in positions:
+                    if np.sqrt((x - ex) ** 2 + (y - ey) ** 2) < min_sep:
+                        too_close = True
+                        break
+                if not too_close:
+                    positions.append((x, y))
+                    placed = True
                     break
-            if not too_close:
-                return x, y
-        return (np.random.uniform(self.x_bounds[0] + 0.04, self.x_bounds[1] - 0.04),
-                np.random.uniform(self.y_bounds[0] + 0.04, self.y_bounds[1] - 0.04))
 
-    def spawn_random_objects(self, num_objects=3, **kwargs):
+            if not placed:
+                fallback_sep = min_sep * 0.75
+                for _ in range(50):
+                    x = np.random.uniform(self.x_bounds[0], self.x_bounds[1])
+                    y = np.random.uniform(self.y_bounds[0], self.y_bounds[1])
+                    if all(np.sqrt((x - ex) ** 2 + (y - ey) ** 2) >= fallback_sep for ex, ey in positions):
+                        positions.append((x, y))
+                        placed = True
+                        break
+                if not placed:
+                    positions.append((np.random.uniform(self.x_bounds[0], self.x_bounds[1]),
+                                      np.random.uniform(self.y_bounds[0], self.y_bounds[1])))
+
+        return positions
+
+    def _create_primitive_box(self, dims, color, pos, orn, mass):
+        """Creates a box primitive body."""
+        sx, sy, sz = dims
+        col_id = p.createCollisionShape(p.GEOM_BOX, halfExtents=[sx / 2.0, sy / 2.0, sz / 2.0])
+        vis_id = p.createVisualShape(p.GEOM_BOX, halfExtents=[sx / 2.0, sy / 2.0, sz / 2.0], rgbaColor=color)
+        body_id = p.createMultiBody(
+            baseMass=mass,
+            baseCollisionShapeIndex=col_id,
+            baseVisualShapeIndex=vis_id,
+            basePosition=pos,
+            baseOrientation=orn
+        )
+        return body_id
+
+    def _create_primitive_cylinder(self, dims, color, pos, orn, mass):
+        """Creates a standing cylinder primitive body."""
+        dia_x, dia_y, height = dims
+        radius = dia_x / 2.0
+        col_id = p.createCollisionShape(p.GEOM_CYLINDER, radius=radius, height=height)
+        vis_id = p.createVisualShape(p.GEOM_CYLINDER, radius=radius, length=height, rgbaColor=color)
+        body_id = p.createMultiBody(
+            baseMass=mass,
+            baseCollisionShapeIndex=col_id,
+            baseVisualShapeIndex=vis_id,
+            basePosition=pos,
+            baseOrientation=orn
+        )
+        return body_id
+
+    def _create_l_bracket(self, color, pos, orn, mass):
+        """Creates a realistic compound L-bracket primitive."""
+        col_id = p.createCollisionShapeArray(
+            [p.GEOM_BOX, p.GEOM_BOX],
+            halfExtents=[[0.025, 0.014, 0.006], [0.007, 0.014, 0.014]],
+            collisionFramePositions=[[0.0, 0.0, 0.0], [-0.018, 0.0, 0.020]]
+        )
+        vis_id = p.createVisualShapeArray(
+            [p.GEOM_BOX, p.GEOM_BOX],
+            halfExtents=[[0.025, 0.014, 0.006], [0.007, 0.014, 0.014]],
+            visualFramePositions=[[0.0, 0.0, 0.0], [-0.018, 0.0, 0.020]],
+            rgbaColors=[color, color]
+        )
+        body_id = p.createMultiBody(
+            baseMass=mass,
+            baseCollisionShapeIndex=col_id,
+            baseVisualShapeIndex=vis_id,
+            basePosition=pos,
+            baseOrientation=orn
+        )
+        return body_id
+
+    def _load_urdf_object(self, urdf_rel, scale, color, pos, orn, mass):
+        """Loads a calibrated URDF object and tints all visual links."""
+        urdf_path = os.path.join(self.data_path, urdf_rel)
+        if not os.path.exists(urdf_path):
+            return None
+
+        body_id = p.loadURDF(
+            urdf_path,
+            basePosition=pos,
+            baseOrientation=orn,
+            globalScaling=scale,
+            useFixedBase=False
+        )
+
+        p.changeVisualShape(body_id, -1, rgbaColor=color)
+        for link_idx in range(p.getNumJoints(body_id)):
+            p.changeVisualShape(body_id, link_idx, rgbaColor=color)
+
+        return body_id
+
+    def _apply_tuned_contact_physics(self, body_id, mass):
         """
-        Spawns N objects chosen from the 5-object library.
-        Each object is large, colorful, and clearly visible.
+        Applies Eval 2 calibrated contact physics parameters:
+        High lateral friction (1.40) and low restitution (0.02) prevent slipping & bouncing.
+        """
+        p.changeDynamics(
+            body_id, -1,
+            mass=mass,
+            lateralFriction=1.40,
+            spinningFriction=0.03,
+            rollingFriction=0.01,
+            restitution=0.02,
+            contactDamping=100.0,
+            contactStiffness=50000.0
+        )
+        for link_idx in range(p.getNumJoints(body_id)):
+            p.changeDynamics(
+                body_id, link_idx,
+                lateralFriction=1.40,
+                spinningFriction=0.03,
+                rollingFriction=0.01,
+                restitution=0.02,
+                contactDamping=100.0,
+                contactStiffness=50000.0
+            )
+
+    def spawn_random_objects(self, num_objects=3):
+        """
+        Spawns a diverse, non-overlapping set of calibrated objects.
+        Drops them from z = table_height + 0.04m and settles for 60 physics steps.
         """
         self.clear()
-        num_objects = max(1, min(num_objects, 5))
-        existing_positions = []
+        num_objects = max(1, int(num_objects))
+        positions = self._sample_positions(num_objects)
 
-        # Shuffle and pick N objects from the library
-        chosen = random.sample(self.OBJECT_LIBRARY, num_objects)
+        if num_objects <= len(self.catalog):
+            selected_entries = random.sample(self.catalog, num_objects)
+        else:
+            selected_entries = [random.choice(self.catalog) for _ in range(num_objects)]
 
-        for i, entry in enumerate(chosen):
-            x, y = self._random_position(existing_positions)
-            existing_positions.append((x, y))
-            z = self.table_height + entry["spawn_z"]
+        if num_objects <= len(self.palette):
+            colors = random.sample(self.palette, num_objects)
+        else:
+            colors = [self.palette[i % len(self.palette)] for i in range(num_objects)]
+
+        for i in range(num_objects):
+            entry = selected_entries[i]
+            color = colors[i]
+            x, y = positions[i]
+            z = self.table_height + 0.04
             yaw = np.random.uniform(-np.pi, np.pi)
-            orientation = p.getQuaternionFromEuler([0, 0, yaw])
+            orientation = p.getQuaternionFromEuler([0.0, 0.0, yaw])
 
-            urdf_path = os.path.join(self.data_path, entry["urdf"])
-            if not os.path.exists(urdf_path):
-                continue
+            body_id = None
+            otype = entry["type"]
 
-            body_id = p.loadURDF(
-                urdf_path,
-                basePosition=[x, y, z],
-                baseOrientation=orientation,
-                globalScaling=entry["scale"],
-                useFixedBase=False
-            )
+            if otype == "primitive_box":
+                body_id = self._create_primitive_box(entry["dims"], color, [x, y, z], orientation, entry["mass"])
+            elif otype == "primitive_cylinder":
+                body_id = self._create_primitive_cylinder(entry["dims"], color, [x, y, z], orientation, entry["mass"])
+            elif otype == "compound_l_bracket":
+                body_id = self._create_l_bracket(color, [x, y, z], orientation, entry["mass"])
+            elif otype == "urdf":
+                body_id = self._load_urdf_object(entry["urdf_rel"], entry["scale"], color, [x, y, z], orientation, entry["mass"])
 
-            # Apply bright distinct color
-            color = entry["color"]
-            p.changeVisualShape(body_id, -1, rgbaColor=color)
-            for link_idx in range(p.getNumJoints(body_id)):
-                p.changeVisualShape(body_id, link_idx, rgbaColor=color)
+            if body_id is None:
+                body_id = self._create_primitive_box(entry["dims"], color, [x, y, z], orientation, entry["mass"])
 
-            # High-grip physics for stable grasping
-            p.changeDynamics(
-                body_id, -1,
-                lateralFriction=1.5,
-                spinningFriction=0.03,
-                rollingFriction=0.03,
-                restitution=0.05,
-                mass=0.20
-            )
-
+            self._apply_tuned_contact_physics(body_id, entry["mass"])
             self.spawned_ids.append(body_id)
             self.object_data.append({
                 "id": body_id,
-                "type": "urdf",
+                "key": entry["key"],
                 "name": entry["name"],
+                "type": otype,
                 "color": color,
-                "init_pose": ([x, y, z], yaw),
-                "dims": entry["default_dims"],
+                "dims": entry["dims"],
+                "mass": entry["mass"],
+                "grasp_span": entry["grasp_span"],
+                "init_pose": ([x, y, z], yaw)
             })
 
-        # Let objects settle
-        for _ in range(120):
+        # Settle for 60 physics steps
+        for _ in range(60):
             p.stepSimulation()
 
-        # Record settled poses and add 3D labels
-        for idx, data in enumerate(self.object_data):
+        # Record stable settled poses
+        for data in self.object_data:
             try:
                 pos, orn = p.getBasePositionAndOrientation(data["id"])
                 euler = p.getEulerFromQuaternion(orn)
                 data["settled_pos"] = np.array(pos)
                 data["settled_yaw"] = euler[2]
-
-                # Compute actual bounding box dims
-                aabb_min, aabb_max = p.getAABB(data["id"])
-                data["dims"] = tuple(aabb_max[i] - aabb_min[i] for i in range(3))
             except Exception:
                 data["settled_pos"] = np.array(data["init_pose"][0])
                 data["settled_yaw"] = data["init_pose"][1]
 
-            # Floating name label above object
-            label_pos = list(data["settled_pos"])
-            label_pos[2] += 0.07
-            label_id = p.addUserDebugText(
-                f"{idx + 1}: {data['name']}",
-                label_pos,
-                textColorRGB=data["color"][:3],
-                textSize=1.3
-            )
-            self.label_ids.append(label_id)
+        # Draw clean 3D HUD floating text labels
+        self._draw_hud_labels()
 
         return self.spawned_ids
 
+    def _draw_hud_labels(self):
+        """Draws minimal, stylish floating 3D text labels (z = settled_z + 0.07m)."""
+        for txt_id in self.hud_text_ids:
+            try:
+                p.removeUserDebugItem(txt_id)
+            except Exception:
+                pass
+        self.hud_text_ids.clear()
+
+        for i, data in enumerate(self.object_data):
+            pos = data["settled_pos"]
+            label_text = f"{i + 1}: {data['name']}"
+            label_pos = [pos[0], pos[1], pos[2] + 0.07]
+            txt_id = p.addUserDebugText(
+                label_text,
+                label_pos,
+                textColorRGB=[1.0, 1.0, 1.0],
+                textSize=0.9,
+                lifeTime=0
+            )
+            self.hud_text_ids.append(txt_id)
+
     def get_ground_truth_grasps(self, camera):
-        """Generates ground-truth Grasp objects for all settled objects."""
+        """
+        Generates ground-truth Grasp objects for all settled objects.
+        Fulfills Section 4.5 Observation Output Contract.
+        """
         from perception.grasp_geometry import Grasp
         gt_grasps = []
         for data in self.object_data:
             pos = data["settled_pos"]
             yaw = data["settled_yaw"]
             u, v = camera.project_world_to_pixel(pos)
-            z_cam = camera.camera_pos[2] - pos[2]
+            z_cam = max(0.1, camera.camera_pos[2] - pos[2])
             f_x = camera.K[0, 0]
-            meter_width = data["dims"][0]
-            width_px = max(18.0, (meter_width * f_x) / z_cam)
+            meter_width = data.get("grasp_span", data["dims"][0])
+            width_px = max(15.0, (meter_width * f_x) / z_cam)
             gt_grasps.append(Grasp(
                 center_px=(u, v),
                 angle_rad=yaw,
@@ -206,14 +410,22 @@ class ObjectSpawner:
         return gt_grasps
 
     def get_object_info(self):
-        """Returns list of human-readable info about spawned objects."""
+        """
+        Returns structured metadata for all currently spawned objects.
+        Fulfills Section 4.5 Observation Output Contract.
+        """
         info = []
         for data in self.object_data:
             pos = data.get("settled_pos", data["init_pose"][0])
             info.append({
+                "body_id": data["id"],
+                "key": data["key"],
                 "name": data["name"],
                 "type": data["type"],
-                "position": [round(float(v), 3) for v in pos],
-                "color_rgb": [round(c, 2) for c in data["color"][:3]],
+                "settled_pos": [round(float(v), 4) for v in pos],
+                "dimensions": [round(float(d), 4) for d in data["dims"]],
+                "mass": data["mass"],
+                "grasp_span": data["grasp_span"],
+                "color_rgb": [round(float(c), 3) for c in data["color"][:3]]
             })
         return info

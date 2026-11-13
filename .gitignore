@@ -24,7 +24,8 @@ Thumbs.db
 # Checkpoints (large binary files)
 checkpoints/ggcnn_weights_cornell.zip
 
-# Test/debug scripts
-check_*.py
-inspect_*.py
-test_*.py
+# Test/debug scratch scripts at root
+/check_*.py
+/inspect_*.py
+/test_*.py
+!tests/

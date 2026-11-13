@@ -1,174 +1,143 @@
-import numpy as np
-import cv2
+"""
+=============================================================================
+  AI-Based Vision-Guided Robotic Grasping System: Deliverable 2
+  Perception Subsystem: 4-Panel Industrial Vision Dashboard
+=============================================================================
+"""
 import os
+import cv2
+import numpy as np
 
 
 class Visualizer:
     """
-    State-of-the-Art Perception HUD & Visualization Engine.
-    Generates high-definition, publication-grade 4-panel dashboards and
-    real-time OpenCV overlays for robotic vision grasping.
+    Visualization engine for Deliverable 2.
+    Creates high-tech, publication-quality 4-panel figures and real-time OpenCV HUD overlays:
+      Panel 1: RGB Perception & Predicted Grasps (with oriented antipodal jaws & target crosshairs)
+      Panel 2: Metric Depth Field (Turbo Colormap)
+      Panel 3: CNN Grasp Quality Map Q(u, v) (Inferno Colormap)
+      Panel 4: Gripper Angle Map theta(u, v) (HSV Colormap)
     """
     def __init__(self):
-        # Professional BGR Color Palette
-        self.C_TOP_GRASP = (102, 255, 0)      # Neon Lime (Top-1 Grasp)
-        self.C_ALT_GRASP = (0, 200, 255)      # Amber Gold (Alternatives)
-        self.C_JAW       = (255, 230, 0)      # Cyan parallel finger contacts
-        self.C_CENTER    = (0, 70, 255)       # Coral target reticle
-        self.C_WHITE     = (250, 250, 250)
-        self.C_DARK_BG   = (16, 20, 28)       # Deep slate-black
-        self.C_ACCENT    = (255, 180, 0)      # Cyan highlight
-        self.C_GREEN     = (80, 230, 90)
+        self.COLOR_TOP_GRASP = (0, 255, 60)      # Vivid Emerald Green
+        self.COLOR_ALT_GRASP = (0, 215, 255)     # Warm Sunflower Yellow
+        self.COLOR_CENTER = (0, 0, 255)          # Bright Red Center
+        self.COLOR_CYAN = (255, 230, 0)          # Electric Cyan in BGR
 
     def draw_grasp_overlay(self, img, grasps, top_k=5):
         """
-        Renders high-precision grasp polygons, parallel jaw pads,
-        reticle target centers, and sleek score badges.
+        Overlays grasp rectangles, jaw contacts, orientation indicators,
+        and score labels onto an RGB image.
         """
         vis = img.copy()
         if len(vis.shape) == 2:
             vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
 
-        # Draw candidate grasps first (background)
-        for idx in reversed(range(min(top_k, len(grasps)))):
-            grasp = grasps[idx]
+        for idx, grasp in enumerate(grasps[:top_k]):
             is_top = (idx == 0)
-            color = self.C_TOP_GRASP if is_top else self.C_ALT_GRASP
-            thickness = 2 if is_top else 1
+            color = self.COLOR_TOP_GRASP if is_top else self.COLOR_ALT_GRASP
+            thickness = 3 if is_top else 2
 
-            # 1. Grasp rectangle boundary
-            pts = grasp.get_rect_points(jaw_length=16.0).astype(np.int32)
-            cv2.polylines(vis, [pts], isClosed=True, color=color, thickness=thickness, lineType=cv2.LINE_AA)
+            # 1. Draw grasp rectangle polygon
+            pts = grasp.get_rect_points(jaw_length=18.0).astype(np.int32)
+            cv2.polylines(vis, [pts], isClosed=True, color=color, thickness=thickness)
 
-            # 2. Parallel jaw contact surfaces (fingers)
-            left_jaw, right_jaw, _ = grasp.get_jaw_lines(jaw_length=16.0)
+            # 2. Highlight the two parallel gripper contact jaws
+            left_jaw, right_jaw, _ = grasp.get_jaw_lines(jaw_length=18.0)
             p1_l, p2_l = tuple(np.int32(left_jaw[0])), tuple(np.int32(left_jaw[1]))
             p1_r, p2_r = tuple(np.int32(right_jaw[0])), tuple(np.int32(right_jaw[1]))
-            cv2.line(vis, p1_l, p2_l, self.C_JAW, thickness + 2, lineType=cv2.LINE_AA)
-            cv2.line(vis, p1_r, p2_r, self.C_JAW, thickness + 2, lineType=cv2.LINE_AA)
+            cv2.line(vis, p1_l, p2_l, self.COLOR_CYAN, thickness + 1)
+            cv2.line(vis, p1_r, p2_r, self.COLOR_CYAN, thickness + 1)
 
-            # 3. Center target reticle
+            # 3. Draw center crosshair
             c_x, c_y = int(round(grasp.u)), int(round(grasp.v))
+            cv2.circle(vis, (c_x, c_y), 3, self.COLOR_CENTER, -1)
+
+            # 4. Text badge on Top-1 grasp
             if is_top:
-                cv2.circle(vis, (c_x, c_y), 6, (0, 0, 0), -1, lineType=cv2.LINE_AA)
-                cv2.circle(vis, (c_x, c_y), 5, self.C_TOP_GRASP, -1, lineType=cv2.LINE_AA)
-                cv2.circle(vis, (c_x, c_y), 2, (0, 0, 0), -1, lineType=cv2.LINE_AA)
+                badge = f"BEST: Q={grasp.quality:.2f} | {grasp.angle_deg:+.0f}deg"
+                cv2.putText(vis, badge, (c_x - 36, c_y - 14),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 0, 0), 3, cv2.LINE_AA)
+                cv2.putText(vis, badge, (c_x - 36, c_y - 14),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 255, 100), 1, cv2.LINE_AA)
             else:
-                cv2.circle(vis, (c_x, c_y), 3, self.C_ALT_GRASP, -1, lineType=cv2.LINE_AA)
-
-            # 4. Floating Score Badge for Top-1
-            if is_top:
-                badge_text = f"TOP-1  Q:{grasp.quality:.2f} | {grasp.angle_deg:+.0f}deg"
-                (tw, th), _ = cv2.getTextSize(badge_text, cv2.FONT_HERSHEY_DUPLEX, 0.40, 1)
-                bx = max(4, min(c_x - tw // 2, vis.shape[1] - tw - 12))
-                by = max(th + 14, c_y - 18)
-
-                # Badge pill background
-                cv2.rectangle(vis, (bx - 4, by - th - 5), (bx + tw + 4, by + 4), (15, 20, 26), -1)
-                cv2.rectangle(vis, (bx - 4, by - th - 5), (bx + tw + 4, by + 4), self.C_TOP_GRASP, 1)
-                cv2.putText(vis, badge_text, (bx, by), cv2.FONT_HERSHEY_DUPLEX, 0.40, self.C_WHITE, 1, cv2.LINE_AA)
+                badge = f"#{idx+1}: {grasp.quality:.2f}"
+                cv2.putText(vis, badge, (c_x - 20, c_y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
 
         return vis
 
     def create_dashboard(self, rgb, depth, heatmaps, grasps, telemetry):
         """
-        Constructs a cyber-industrial 2x2 perception dashboard:
-          [Panel 1: RGB Perception & Grasps]  [Panel 2: Metric Depth Field]
-          [Panel 3: CNN Quality Map Q(u, v)]   [Panel 4: Gripper Angle theta]
-        Surrounded by a real-time HUD header and interactive bottom status bar.
+        Constructs a 2x2 multi-panel industrial vision dashboard with sleek HUD banners:
+        [Header HUD Banner: Live CPS Robotics Telemetry]
+        [Panel 1: RGB + Grasp Overlays]   [Panel 2: Colorized Metric Depth]
+        [Panel 3: Grasp Quality Map Q]    [Panel 4: Gripper Orientation Map theta]
+        [Footer Command Bar: Quick Controls]
         """
         h, w = rgb.shape[:2]
 
-        # --- Panel 1: RGB + Grasp Overlays ---
+        # Panel 1: RGB with Grasp Overlays
         panel1 = self.draw_grasp_overlay(rgb, grasps)
 
-        # --- Panel 2: Metric Depth Field (Turbo Colormap) ---
+        # Panel 2: Depth map colorized (Turbo Colormap)
         d = depth.copy()
-        d_min, d_max = np.nanmin(d), np.nanmax(d)
-        d_norm = ((d - d_min) / (d_max - d_min + 1e-6) * 255.0).astype(np.uint8)
+        d_norm = ((d - np.nanmin(d)) / (np.nanmax(d) - np.nanmin(d) + 1e-6) * 255).astype(np.uint8)
         panel2 = cv2.applyColorMap(d_norm, cv2.COLORMAP_TURBO)
-        # Depth range badge
-        range_str = f"Z: {d_min:.2f}m - {d_max:.2f}m"
-        cv2.rectangle(panel2, (w - 130, h - 22), (w - 4, h - 4), (16, 20, 26), -1)
-        cv2.putText(panel2, range_str, (w - 124, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (220, 220, 220), 1, cv2.LINE_AA)
 
-        # --- Panel 3: Grasp Quality Map Q(u, v) (Inferno) ---
-        q_norm = (np.clip(heatmaps['q_map'], 0.0, 1.0) * 255.0).astype(np.uint8)
+        # Panel 3: Grasp Quality Heatmap Q(u, v) (Inferno)
+        q_raw = heatmaps.get('q_map', np.zeros_like(depth))
+        q_norm = (np.clip(q_raw, 0.0, 1.0) * 255).astype(np.uint8)
         panel3 = cv2.applyColorMap(q_norm, cv2.COLORMAP_INFERNO)
-        # Mark local maxima peaks
-        for r_idx, g in enumerate(grasps[:5]):
-            gx, gy = int(round(g.u)), int(round(g.v))
-            cv2.circle(panel3, (gx, gy), 6, (0, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(panel3, f"#{r_idx+1}", (gx + 8, gy + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+        for g in grasps[:5]:
+            cv2.circle(panel3, (int(g.u), int(g.v)), 4, (0, 255, 255), 1)
 
-        # --- Panel 4: Gripper Orientation Map Theta (HSV) ---
-        ang = heatmaps['ang_map']
+        # Panel 4: Orientation Map theta(u, v) (HSV)
+        ang = heatmaps.get('ang_map', np.zeros_like(depth))
         ang_norm = ((ang + np.pi / 2.0) / np.pi * 255.0).astype(np.uint8)
         panel4 = cv2.applyColorMap(ang_norm, cv2.COLORMAP_HSV)
 
-        # --- Style Each Panel with Modern Dark Header ---
-        headers = [
-            ("1. RGB CAMERA // PREDICTED GRASPS", (102, 255, 0)),
-            ("2. METRIC DEPTH SENSOR FIELD", (255, 180, 0)),
-            ("3. CNN GRASP QUALITY MAP Q(u,v)", (0, 140, 255)),
-            ("4. GRIPPER ANGLE MAP THETA(u,v)", (220, 80, 255)),
+        # Title cards on each of the 4 panels
+        panel_titles = [
+            "1. RGB Perception & Antipodal Grasps",
+            "2. Metric Depth Field (Linear)",
+            "3. GG-CNN Quality Heatmap Q(u, v)",
+            "4. Gripper Angle Map theta(u, v)"
         ]
-        panels = [panel1, panel2, panel3, panel4]
-        for p, (title, tag_color) in zip(panels, headers):
-            # Top card banner
-            cv2.rectangle(p, (0, 0), (w, 24), (16, 20, 26), -1)
-            # Accent tag
-            cv2.rectangle(p, (6, 6), (12, 18), tag_color, -1)
-            cv2.putText(p, title, (18, 17), cv2.FONT_HERSHEY_DUPLEX, 0.38, (240, 240, 240), 1, cv2.LINE_AA)
-            # Thin divider
-            cv2.line(p, (0, 24), (w, 24), (35, 45, 60), 1)
+        for p_img, title in zip([panel1, panel2, panel3, panel4], panel_titles):
+            cv2.rectangle(p_img, (0, 0), (w, 22), (18, 20, 24), -1)
+            cv2.putText(p_img, title, (8, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (230, 235, 240), 1, cv2.LINE_AA)
 
-        # Assemble 2x2 Grid with 2px borders
+        # Assemble 2x2 grid
         top_row = np.hstack([panel1, panel2])
         bottom_row = np.hstack([panel3, panel4])
         grid = np.vstack([top_row, bottom_row])
-        grid_w = grid.shape[1]
 
-        # --- TOP HUD HEADER BAR (60px) ---
-        hud_h = 60
-        hud = np.full((hud_h, grid_w, 3), 16, dtype=np.uint8)
-        # Background gradient line
-        cv2.line(hud, (0, hud_h - 1), (grid_w, hud_h - 1), (45, 65, 90), 1)
-
-        # Title & Subtitle
-        cv2.putText(hud, "PICKBOT ROBOTIC CELL // REAL-TIME GRASP SYNTHESIS",
-                    (14, 24), cv2.FONT_HERSHEY_DUPLEX, 0.52, (0, 230, 255), 1, cv2.LINE_AA)
+        # Top HUD Header (Sleek Dark Glass Style)
+        hud_h = 46
+        hud = np.full((hud_h, grid.shape[1], 3), 20, dtype=np.uint8)
 
         lat = telemetry.get('inference_time_ms', 0.0)
         fps = telemetry.get('fps', 0.0)
-        dev = str(telemetry.get('device', 'cpu')).upper()
+        dev = telemetry.get('device', 'cpu')
         top_q = telemetry.get('top_score', 0.0)
-        num_cand = len(grasps)
 
-        # Pills/Badges in Header
-        pills = [
-            (f"STATUS: ONLINE", (0, 200, 80)),
-            (f"DEVICE: {dev}", (220, 160, 40)),
-            (f"LATENCY: {lat:.1f}ms ({fps:.0f} FPS)", (180, 100, 255)),
-            (f"BEST Q: {top_q:.2f}", (0, 215, 255)),
-            (f"TARGETS: {num_cand}", (240, 240, 240)),
-        ]
-        px = 14
-        for text, pcolor in pills:
-            (pw, ph), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
-            cv2.rectangle(hud, (px, 34), (px + pw + 12, 52), (28, 35, 48), -1)
-            cv2.rectangle(hud, (px, 34), (px + pw + 12, 52), pcolor, 1)
-            cv2.putText(hud, text, (px + 6, 47), cv2.FONT_HERSHEY_SIMPLEX, 0.35, pcolor, 1, cv2.LINE_AA)
-            px += pw + 20
+        t1 = "✦ CPS PICKBOT: AUTONOMOUS VISION-GUIDED MANIPULATION (GG-CNN) ✦"
+        t2 = f"Inference: {lat:.1f} ms ({fps:.0f} FPS) | Hardware: {dev.upper()} | Best Quality: {top_q:.3f} | Targets: {len(grasps)}"
+        if len(grasps) > 0 and grasps[0].world_coords is not None:
+            wx, wy, wz = grasps[0].world_coords
+            t2 += f" | 3D Pos: [{wx:.2f}, {wy:.2f}, {wz:.2f}]m | Angle: {grasps[0].angle_deg:+.1f}°"
 
-        # --- BOTTOM ACTION STATUS FOOTER (26px) ---
-        foot_h = 26
-        foot = np.full((foot_h, grid_w, 3), 16, dtype=np.uint8)
-        cv2.line(foot, (0, 0), (grid_w, 0), (45, 65, 90), 1)
-        foot_text = "HOTKEYS: [D] Detect Grasps  |  [Space] Execute Pick-and-Place  |  [R] Respawn Scene  |  [Q] Exit"
-        cv2.putText(foot, foot_text, (14, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (170, 185, 200), 1, cv2.LINE_AA)
+        cv2.putText(hud, t1, (12, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 240, 210), 1, cv2.LINE_AA)
+        cv2.putText(hud, t2, (12, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (215, 220, 225), 1, cv2.LINE_AA)
 
-        dashboard = np.vstack([hud, grid, foot])
+        # Bottom Command Bar
+        bar_h = 24
+        bar = np.full((bar_h, grid.shape[1], 3), 24, dtype=np.uint8)
+        bar_text = "Controls: [1] Detect  |  [2] Next Pick  |  [3] Pick All (Clear)  |  [4] Pick Batch  |  [5] Respawn  |  [q] Quit"
+        cv2.putText(bar, bar_text, (12, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 175, 190), 1, cv2.LINE_AA)
+
+        dashboard = np.vstack([hud, grid, bar])
         return dashboard
 
     def save_report_figure(self, rgb, depth, heatmaps, grasps, telemetry, save_path="outputs/deliverable1_demo.png"):
