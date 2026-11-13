@@ -1,61 +1,62 @@
 #!/usr/bin/env python3
 """
-=================================================================
-  CYBER PHYSICAL SYSTEMS: INTERACTIVE SIMULATION PLAYGROUND
-=================================================================
-An interactive simulation environment for exploring vision-guided
-robotic grasping. Features:
-  - PyBullet 3D GUI with interactive robot control sliders
-  - Real-time CNN grasp detection with visual feedback
-  - Live OpenCV perception dashboard
-  - Object spawning, respawning, and scene manipulation
-  - Grasp execution: detect, approach, grasp, and lift objects
-
-Usage:
-    python playground.py
-    python playground.py --num-objects 5
-    python playground.py --no-dashboard  (PyBullet only, no OpenCV window)
-=================================================================
+=============================================================================
+  CYBER PHYSICAL SYSTEMS: INTERACTIVE SIMULATION PLAYGROUND (EVAL 2)
+  Autonomous Vision-Guided Robotic Grasping & Pick-and-Place System
+=============================================================================
+Features:
+  - PyBullet 3D GUI with studio lighting, shadow mapping, and 3D HUD banner.
+  - GG-CNN real-time grasp perception running on CUDA GPU.
+  - 4-Panel OpenCV Live Perception Dashboard.
+  - Single Pick execution with automatic re-targeting (no repeat picking).
+  - Autonomous "Pick All (Clear Scene)" & "Batch Pick (Count)" without stopping.
+  - Integer-clamped object counts with dynamic 3D configuration display.
+  - Calibrated collection tray transfer with zero arm drift on return home.
+=============================================================================
 """
 import argparse
-import pybullet as p
 import time
 import sys
 import os
 import numpy as np
 import cv2
+import pybullet as p
 
 from simulation.environment import GraspingEnvironment
+from simulation.grasp_executor import GraspExecutor
 from perception.detector import GraspDetector
 from perception.visualizer import Visualizer
 
 
 class InteractivePlayground:
-    """Full interactive playground with PyBullet GUI + OpenCV dashboard."""
+    """Full interactive simulation playground with PyBullet GUI + OpenCV HUD."""
 
     def __init__(self, num_objects=3, show_dashboard=True, checkpoint=None):
         self.show_dashboard = show_dashboard
-        self.num_objects = num_objects
+        self.num_objects = max(1, min(8, int(round(num_objects))))
 
-        print("=" * 70)
-        print("  CYBER PHYSICAL SYSTEMS: INTERACTIVE PLAYGROUND")
-        print("  AI-Based Vision-Guided Robotic Grasping System")
-        print("=" * 70)
+        print("=" * 75)
+        print("  CYBER PHYSICAL SYSTEMS: INTERACTIVE PICK-AND-PLACE PLAYGROUND")
+        print("  Autonomous AI-Based Robotic Manipulation System")
+        print("=" * 75)
         print()
 
-        # 1. Initialize PyBullet Environment
+        # 1. Initialize PyBullet Simulation Environment
         print("[1/3] Initializing PyBullet Simulation with GUI...")
         self.env = GraspingEnvironment(gui=True)
 
-        # 2. Initialize Perception
+        # 2. Initialize Perception Model
         ckpt = checkpoint or "checkpoints/ggcnn_weights_cornell/ggcnn_epoch_23_cornell_statedict.pt"
+        if not os.path.exists(ckpt):
+            ckpt = "checkpoints/ggcnn_finetuned.pt"
         print(f"[2/3] Loading GG-CNN Perception Model: {ckpt}")
         self.detector = GraspDetector(checkpoint_path=ckpt)
         self.visualizer = Visualizer()
+        self.executor = GraspExecutor(self.env.robot, tray_pos=(0.45, 0.45, 0.22))
 
-        # 3. Spawn initial scene
-        print(f"[3/3] Spawning {num_objects} objects in workspace...")
-        self.env.reset(num_objects=num_objects)
+        # 3. Spawn initial calibrated scene
+        print(f"[3/3] Spawning {self.num_objects} objects in workspace...")
+        self.env.reset(num_objects=self.num_objects)
         for _ in range(60):
             self.env.step()
 
@@ -64,142 +65,187 @@ class InteractivePlayground:
         self.last_telemetry = {}
         self.last_heatmaps = {}
         self.grasp_markers = []
+        self.hud_text_ids = []
         self.detection_count = 0
         self.grasp_attempts = 0
         self.successful_grasps = 0
+        self.status_message = "READY"
 
-        # Setup interactive GUI controls
+        # Setup GUI controls
         self._setup_gui_controls()
-
-        # Print help
+        self._draw_tray_marker()
+        self._update_3d_hud()
         self._print_help()
 
     def _setup_gui_controls(self):
-        """Create PyBullet GUI sliders and buttons."""
-        # Title text
+        """Create PyBullet GUI sliders and action buttons."""
+        # Section Header Text in 3D Scene
         p.addUserDebugText(
-            "CPS Interactive Playground",
-            [0.5, 0.0, 0.55],
-            textColorRGB=[1.0, 0.85, 0.0],
-            textSize=1.5
-        )
-        p.addUserDebugText(
-            "Use sliders on the right panel -->",
-            [0.5, 0.0, 0.50],
-            textColorRGB=[0.7, 0.7, 0.7],
-            textSize=1.0
+            "✦ CPS PICKBOT STUDIO ✦",
+            [0.50, 0.00, 0.58],
+            textColorRGB=[0.08, 0.88, 0.92],
+            textSize=1.4
         )
 
-        # Robot end-effector control sliders
-        self.slider_x = p.addUserDebugParameter("Robot X", 0.2, 0.8, 0.5)
-        self.slider_y = p.addUserDebugParameter("Robot Y", -0.4, 0.4, 0.0)
-        self.slider_z = p.addUserDebugParameter("Robot Z", 0.0, 0.6, 0.35)
-        self.slider_yaw = p.addUserDebugParameter("Gripper Yaw (deg)", -180, 180, 0)
+        # Action Buttons (Buttons are sliders that increment on click)
+        self.btn_detect = p.addUserDebugParameter(">> [1] DETECT GRASPS <<", 1, 0, 0)
+        self.btn_execute = p.addUserDebugParameter(">> [2] EXECUTE NEXT GRASP <<", 1, 0, 0)
+        self.btn_pick_all = p.addUserDebugParameter(">> [3] PICK ALL (CLEAR SCENE) <<", 1, 0, 0)
+        self.btn_batch_pick = p.addUserDebugParameter(">> [4] PICK BATCH (COUNT) <<", 1, 0, 0)
+        self.btn_respawn = p.addUserDebugParameter(">> [5] RESPAWN OBJECTS <<", 1, 0, 0)
+        self.btn_reset_robot = p.addUserDebugParameter(">> [6] RESET ROBOT TO HOME <<", 1, 0, 0)
 
-        # Object count slider
-        self.slider_num_obj = p.addUserDebugParameter("Num Objects (respawn)", 1, 8, self.num_objects)
+        # Configuration Sliders
+        self.slider_num_obj = p.addUserDebugParameter("Spawn Count [1 to 8]", 1, 8, self.num_objects)
+        self.slider_batch_count = p.addUserDebugParameter("Batch Pick Count [1 to 8]", 1, 8, 2)
 
-        # Action buttons (PyBullet buttons are sliders that increment on click)
-        self.btn_detect = p.addUserDebugParameter(">> DETECT GRASPS <<", 1, 0, 0)
-        self.btn_execute = p.addUserDebugParameter(">> EXECUTE TOP GRASP <<", 1, 0, 0)
-        self.btn_respawn = p.addUserDebugParameter(">> RESPAWN OBJECTS <<", 1, 0, 0)
-        self.btn_reset_robot = p.addUserDebugParameter(">> RESET ROBOT <<", 1, 0, 0)
+        # Manual Arm Controls (X, Y, Z, Yaw)
+        self.slider_x = p.addUserDebugParameter("Manual Arm X", 0.20, 0.80, 0.50)
+        self.slider_y = p.addUserDebugParameter("Manual Arm Y", -0.40, 0.40, 0.00)
+        self.slider_z = p.addUserDebugParameter("Manual Arm Z", 0.05, 0.60, 0.35)
+        self.slider_yaw = p.addUserDebugParameter("Manual Gripper Yaw", -180, 180, 0)
 
-        # Store previous button values to detect clicks
+        # Store previous button values to detect user clicks
         self.prev_detect = p.readUserDebugParameter(self.btn_detect)
         self.prev_execute = p.readUserDebugParameter(self.btn_execute)
+        self.prev_pick_all = p.readUserDebugParameter(self.btn_pick_all)
+        self.prev_batch_pick = p.readUserDebugParameter(self.btn_batch_pick)
         self.prev_respawn = p.readUserDebugParameter(self.btn_respawn)
         self.prev_reset_robot = p.readUserDebugParameter(self.btn_reset_robot)
 
+    def _draw_tray_marker(self):
+        """Draws a visual boundary box around the collection drop tray."""
+        tx, ty, tz = 0.45, 0.45, 0.002
+        half_w = 0.11
+        p.addUserDebugLine([tx - half_w, ty - half_w, tz], [tx + half_w, ty - half_w, tz], [0.95, 0.78, 0.10], 2.0)
+        p.addUserDebugLine([tx + half_w, ty - half_w, tz], [tx + half_w, ty + half_w, tz], [0.95, 0.78, 0.10], 2.0)
+        p.addUserDebugLine([tx + half_w, ty + half_w, tz], [tx - half_w, ty + half_w, tz], [0.95, 0.78, 0.10], 2.0)
+        p.addUserDebugLine([tx - half_w, ty + half_w, tz], [tx - half_w, ty - half_w, tz], [0.95, 0.78, 0.10], 2.0)
+        p.addUserDebugText("DROP TRAY", [tx, ty - 0.13, tz + 0.01], [0.95, 0.78, 0.10], 0.9)
+
+    def _update_3d_hud(self):
+        """Updates the high-visibility floating 3D status HUD in PyBullet."""
+        for txt_id in self.hud_text_ids:
+            try:
+                p.removeUserDebugItem(txt_id)
+            except Exception:
+                pass
+        self.hud_text_ids.clear()
+
+        table_objs = self.get_table_objects()
+        tray_objs = self.get_tray_objects()
+        spawn_n = int(round(p.readUserDebugParameter(self.slider_num_obj)))
+        batch_n = int(round(p.readUserDebugParameter(self.slider_batch_count)))
+
+        rate_str = f"{100.0 * self.successful_grasps / max(1, self.grasp_attempts):.0f}%" if self.grasp_attempts > 0 else "N/A"
+
+        line1 = f"Status: [{self.status_message}] | Table: {len(table_objs)} objs | Tray: {len(tray_objs)} objs"
+        line2 = f"Success: {rate_str} ({self.successful_grasps}/{self.grasp_attempts}) | Config: Spawn [{spawn_n}] | Batch [{batch_n}]"
+
+        t1 = p.addUserDebugText(line1, [0.50, 0.00, 0.53], textColorRGB=[1.0, 1.0, 1.0], textSize=1.0)
+        t2 = p.addUserDebugText(line2, [0.50, 0.00, 0.48], textColorRGB=[0.75, 0.85, 0.95], textSize=0.9)
+        self.hud_text_ids.extend([t1, t2])
+
     def _print_help(self):
-        """Print interactive controls help."""
+        """Print interactive control commands."""
         print()
-        print("=" * 70)
-        print("  CONTROLS:")
-        print("=" * 70)
-        print("  [PyBullet GUI Panel - Right Side]")
-        print("    Robot X/Y/Z     : Move the robot arm end-effector")
-        print("    Gripper Yaw     : Rotate the gripper orientation")
-        print("    Num Objects     : Set count for next respawn")
-        print()
-        print("  [Action Buttons]")
-        print("    DETECT GRASPS   : Run CNN inference on current scene")
-        print("    EXECUTE GRASP   : Move robot to top grasp, close gripper, lift")
-        print("    RESPAWN OBJECTS  : Clear and spawn new random objects")
-        print("    RESET ROBOT     : Return robot to home position")
+        print("=" * 75)
+        print("  INTERACTIVE GUI CONTROLS:")
+        print("=" * 75)
+        print("  [Action Buttons - Right Panel]")
+        print("    >> [1] DETECT GRASPS       : Run GG-CNN inference on remaining objects")
+        print("    >> [2] EXECUTE NEXT GRASP  : Pick next object into tray (auto-refreshes)")
+        print("    >> [3] PICK ALL (AUTONOMOUS): Pick all objects one-by-one until scene is clear")
+        print("    >> [4] PICK BATCH (COUNT)  : Pick exact count set by 'Batch Pick Count' slider")
+        print("    >> [5] RESPAWN OBJECTS     : Clear scene and spawn new randomized objects")
+        print("    >> [6] RESET ROBOT TO HOME : Smoothly return arm to tucked home posture")
         print()
         print("  [OpenCV Dashboard Window]")
-        print("    Shows live RGB, depth, quality heatmap, and angle map")
-        print("    Updated each time you run DETECT GRASPS")
+        print("    Displays live 4-panel RGB, Depth, Quality Heatmap, and Angle Map.")
         print()
         print("  Press Ctrl+C in terminal to exit.")
-        print("=" * 70)
+        print("=" * 75)
         print()
 
-    def _clear_grasp_markers(self):
-        """Remove all visual debug markers from PyBullet."""
-        for marker_id in self.grasp_markers:
+    def get_table_objects(self):
+        """Returns list of spawned objects currently resting on the picking table."""
+        table_objs = []
+        for obj in self.env.spawner.object_data:
             try:
-                p.removeUserDebugItem(marker_id)
+                pos, _ = p.getBasePositionAndOrientation(obj["id"])
+                # Table workspace: X in [0.30, 0.70], Y in [-0.22, 0.22], Z < 0.10
+                if 0.30 <= pos[0] <= 0.70 and -0.22 <= pos[1] <= 0.22 and pos[2] < 0.10:
+                    table_objs.append((obj, pos))
+            except Exception:
+                pass
+        return table_objs
+
+    def get_tray_objects(self):
+        """Returns list of spawned objects delivered into the collection tray."""
+        tray_objs = []
+        for obj in self.env.spawner.object_data:
+            try:
+                pos, _ = p.getBasePositionAndOrientation(obj["id"])
+                # Tray location: Y > 0.30 and X in [0.30, 0.60]
+                if pos[1] > 0.30 and 0.30 <= pos[0] <= 0.60:
+                    tray_objs.append((obj, pos))
+            except Exception:
+                pass
+        return tray_objs
+
+    def _clear_grasp_markers(self):
+        """Remove debug markers from the 3D scene."""
+        for m in self.grasp_markers:
+            try:
+                p.removeUserDebugItem(m)
             except Exception:
                 pass
         self.grasp_markers.clear()
 
     def _draw_grasp_in_sim(self, grasp, rank=0):
-        """Draw a grasp visualization in the 3D PyBullet scene."""
+        """Draws oriented grasp candidates in the 3D PyBullet scene."""
         if grasp.world_coords is None:
             return
 
         wx, wy, wz = grasp.world_coords
         is_top = (rank == 0)
+        color = [0.0, 1.0, 0.25] if is_top else [1.0, 0.80, 0.10]
+        width = 3.5 if is_top else 2.0
 
-        # Colors: green for top grasp, yellow for alternatives
-        color = [0.0, 1.0, 0.2] if is_top else [1.0, 0.85, 0.0]
-        width = 4.0 if is_top else 2.0
-
-        # Draw approach line (vertical above grasp point)
-        m1 = p.addUserDebugLine(
-            [wx, wy, wz], [wx, wy, wz + 0.15],
-            lineColorRGB=color, lineWidth=width, lifeTime=0
-        )
+        # Vertical approach indicator
+        m1 = p.addUserDebugLine([wx, wy, wz], [wx, wy, wz + 0.14], lineColorRGB=color, lineWidth=width, lifeTime=0)
         self.grasp_markers.append(m1)
 
-        # Draw small crosshair at grasp point
-        offset = 0.02
-        m2 = p.addUserDebugLine(
-            [wx - offset, wy, wz], [wx + offset, wy, wz],
-            lineColorRGB=color, lineWidth=width, lifeTime=0
-        )
-        m3 = p.addUserDebugLine(
-            [wx, wy - offset, wz], [wx, wy + offset, wz],
-            lineColorRGB=color, lineWidth=width, lifeTime=0
-        )
+        # Crosshair at grasp point
+        off = 0.015
+        m2 = p.addUserDebugLine([wx - off, wy, wz], [wx + off, wy, wz], lineColorRGB=color, lineWidth=width, lifeTime=0)
+        m3 = p.addUserDebugLine([wx, wy - off, wz], [wx, wy + off, wz], lineColorRGB=color, lineWidth=width, lifeTime=0)
         self.grasp_markers.extend([m2, m3])
 
-        # Draw gripper opening direction based on angle
+        # Gripper jaw opening direction indicator
         angle = grasp.angle_rad
-        dx = np.cos(angle) * 0.03
-        dy = np.sin(angle) * 0.03
-        m4 = p.addUserDebugLine(
-            [wx - dx, wy - dy, wz], [wx + dx, wy + dy, wz],
-            lineColorRGB=[0.0, 0.7, 1.0], lineWidth=3.0, lifeTime=0
-        )
+        dx = np.cos(angle) * 0.025
+        dy = np.sin(angle) * 0.025
+        m4 = p.addUserDebugLine([wx - dx, wy - dy, wz], [wx + dx, wy + dy, wz], lineColorRGB=[0.08, 0.88, 0.92], lineWidth=3.0, lifeTime=0)
         self.grasp_markers.append(m4)
 
-        # Text label for top grasp
-        if is_top:
-            m5 = p.addUserDebugText(
-                f"Q={grasp.quality:.2f} | {grasp.angle_deg:+.0f}deg",
-                [wx, wy, wz + 0.17],
-                textColorRGB=[1.0, 1.0, 1.0],
-                textSize=1.2
-            )
-            self.grasp_markers.append(m5)
+        # Floating score badge
+        badge_text = f"#{rank+1}: Q={grasp.quality:.2f}"
+        m5 = p.addUserDebugText(badge_text, [wx, wy, wz + 0.16], textColorRGB=[1.0, 1.0, 1.0], textSize=0.95, lifeTime=0)
+        self.grasp_markers.append(m5)
 
     def run_detection(self):
-        """Run CNN grasp detection on the current scene."""
+        """Runs GG-CNN perception on the remaining table objects."""
         self.detection_count += 1
         self._clear_grasp_markers()
+
+        # Guarantee camera view is 100% unobstructed with zero robot arm pixels
+        self.env.robot.reset()
+        for _ in range(15):
+            self.env.step()
+
+        self.status_message = "PERCEPTION SCANNING..."
+        self._update_3d_hud()
 
         print(f"\n[Detection #{self.detection_count}] Running GG-CNN inference...")
 
@@ -208,187 +254,270 @@ class InteractivePlayground:
             rgb, depth, camera=self.env.camera, top_k=5
         )
 
-        self.last_grasps = grasps
+        # Filter grasps to ensure they strictly lie on the active picking table (Z < 0.12m)
+        valid_grasps = [g for g in grasps if g.world_coords is not None and g.world_coords[2] < 0.12]
+
+        self.last_grasps = valid_grasps
         self.last_telemetry = telemetry
         self.last_heatmaps = heatmaps
 
-        # Print results
-        print(f"  Latency   : {telemetry['inference_time_ms']:.2f} ms")
-        print(f"  Throughput: {telemetry['fps']:.0f} FPS")
-        print(f"  Device    : {telemetry['device'].upper()}")
-        print(f"  Detected  : {len(grasps)} grasp candidates")
+        table_objs = self.get_table_objects()
+        print(f"  Latency    : {telemetry['inference_time_ms']:.2f} ms ({telemetry['fps']:.0f} FPS)")
+        print(f"  Device     : {telemetry['device'].upper()}")
+        print(f"  Objects    : {len(table_objs)} remaining on table")
+        print(f"  Grasp Peaks: {len(valid_grasps)} candidates detected")
 
-        # Show objects in scene
-        obj_info = self.env.spawner.get_object_info()
-        print(f"  Objects   : {', '.join(o['name'] for o in obj_info)}")
+        if valid_grasps:
+            top = valid_grasps[0]
+            wx, wy, wz = top.world_coords
+            print(f"  Top Grasp  : Q={top.quality:.3f} | Angle: {top.angle_deg:+.1f}deg | Pos: [{wx:.3f}, {wy:.3f}, {wz:.3f}]")
+            for rank, g in enumerate(valid_grasps[:4]):
+                self._draw_grasp_in_sim(g, rank=rank)
+            self.status_message = f"TARGET ACQUIRED (Q={top.quality:.2f})"
+        else:
+            print("  No grasp candidates found on table surface.")
+            self.status_message = "NO OBJECTS DETECTED"
 
-        if grasps:
-            top = grasps[0]
-            print(f"  Top Grasp : Q={top.quality:.3f}, angle={top.angle_deg:+.1f}deg", end="")
-            if top.world_coords is not None:
-                wx, wy, wz = top.world_coords
-                print(f", pos=[{wx:.3f}, {wy:.3f}, {wz:.3f}]")
-            else:
-                print()
-
-        # Draw grasps in 3D simulation
-        for rank, g in enumerate(grasps[:5]):
-            self._draw_grasp_in_sim(g, rank=rank)
+        self._update_3d_hud()
 
         # Update OpenCV dashboard
-        if self.show_dashboard:
-            dashboard = self.visualizer.create_dashboard(rgb, depth, heatmaps, grasps, telemetry)
+        if self.show_dashboard and heatmaps:
+            dashboard = self.visualizer.create_dashboard(rgb, depth, heatmaps, valid_grasps, telemetry)
             cv2.imshow("CPS Grasp Detection Dashboard", cv2.cvtColor(dashboard, cv2.COLOR_RGB2BGR))
             cv2.waitKey(1)
 
-    def execute_grasp(self):
-        """Execute a full pick sequence: approach, descend, grasp, lift."""
+        return valid_grasps
+
+    def execute_single_grasp(self):
+        """
+        Executes a pick on the top candidate, drops it in the tray,
+        and automatically re-scans the table for the next object.
+        """
+        table_objs = self.get_table_objects()
+        if not table_objs:
+            print("\n[Execute] No objects remaining on table! All objects are in tray.")
+            self.status_message = "ALL OBJECTS IN TRAY (CLICK RESPAWN)"
+            self._update_3d_hud()
+            return False
+
+        # If no grasp stored or scene changed, run fresh detection
         if not self.last_grasps:
-            print("\n[Execute] No grasps detected yet! Run DETECT GRASPS first.")
-            return
+            self.run_detection()
+            if not self.last_grasps:
+                print("[Execute] No valid grasps detected on table.")
+                return False
 
         top = self.last_grasps[0]
-        if top.world_coords is None:
-            print("\n[Execute] Top grasp has no 3D coordinates!")
+        self.grasp_attempts += 1
+        self.status_message = f"EXECUTING PICK #{self.grasp_attempts}..."
+        self._update_3d_hud()
+
+        print(f"\n{'='*70}")
+        print(f"  EXECUTE PICK-AND-PLACE (Attempt #{self.grasp_attempts})")
+        print(f"{'='*70}")
+
+        result = self.executor.execute_pick_and_place(top, spawner=self.env.spawner)
+
+        if result["success"]:
+            self.successful_grasps += 1
+            lifted = result.get("lifted_object", "Object")
+            self.status_message = f"DELIVERED [{lifted}] TO TRAY"
+            print(f"  >>> PICK-AND-PLACE SUCCESSFUL! Delivered {lifted} to tray. <<<")
+        else:
+            self.status_message = "GRASP MISSED"
+            print(f"  >>> GRASP MISSED - Object not secured in fingers. <<<")
+
+        self._update_3d_hud()
+
+        # Immediately run fresh perception scan on the remaining objects
+        # so next click automatically targets the next object!
+        rem_objs = self.get_table_objects()
+        if rem_objs:
+            print(f"\n--> Auto-scanning table ({len(rem_objs)} objects remaining)...")
+            self.run_detection()
+        else:
+            self.last_grasps.clear()
+            self._clear_grasp_markers()
+            self.status_message = "SCENE CLEARED! ALL IN TRAY"
+            self._update_3d_hud()
+
+        return result["success"]
+
+    def batch_pick(self, target_count=None):
+        """
+        Autonomously picks objects one by one into the tray without user stopping.
+        target_count: Number of objects to pick. If None, picks ALL objects.
+        """
+        table_objs = self.get_table_objects()
+        if not table_objs:
+            print("\n[Batch Pick] Table is already empty! Click RESPAWN to spawn objects.")
+            self.status_message = "TABLE EMPTY (CLICK RESPAWN)"
+            self._update_3d_hud()
             return
 
-        self.grasp_attempts += 1
-        wx, wy, wz = top.world_coords
-        yaw = top.angle_rad
+        total_to_pick = len(table_objs) if target_count is None else min(len(table_objs), int(target_count))
+        mode_name = "PICK ALL (CLEAR SCENE)" if target_count is None else f"BATCH PICK ({total_to_pick} OBJECTS)"
 
-        print(f"\n[Execute Grasp #{self.grasp_attempts}]")
-        print(f"  Target: [{wx:.3f}, {wy:.3f}, {wz:.3f}], yaw={top.angle_deg:+.1f}deg")
+        print(f"\n{'='*75}")
+        print(f"  STARTING AUTONOMOUS {mode_name}")
+        print(f"  Target: Pick {total_to_pick} objects one by one into the collection tray")
+        print(f"{'='*75}")
 
-        # Phase 1: Approach (move above target)
-        approach_z = wz + 0.15
-        print(f"  Phase 1: Approach -> z={approach_z:.3f}m")
-        self.env.robot.move_to_cartesian([wx, wy, approach_z], target_yaw=yaw, steps=120)
-        for _ in range(30):
-            self.env.step()
+        picked_count = 0
+        for i in range(total_to_pick):
+            rem = self.get_table_objects()
+            if not rem:
+                print("\n[Batch Pick] All table objects cleared!")
+                break
 
-        # Phase 2: Descend to grasp height
-        grasp_z = wz + 0.02
-        print(f"  Phase 2: Descend -> z={grasp_z:.3f}m")
-        self.env.robot.move_to_cartesian([wx, wy, grasp_z], target_yaw=yaw, steps=100)
-        for _ in range(30):
-            self.env.step()
+            print(f"\n--> [Batch Step {i+1}/{total_to_pick}] Objects on table: {len(rem)}")
+            self.status_message = f"BATCH {i+1}/{total_to_pick}: SCANNING..."
+            self._update_3d_hud()
 
-        # Phase 3: Close gripper
-        print("  Phase 3: Closing gripper...")
-        for g_idx in self.env.robot.gripper_joints:
-            p.setJointMotorControl2(
-                self.env.robot.robot_id, g_idx,
-                p.POSITION_CONTROL, targetPosition=0.0, force=40.0
-            )
-        for _ in range(60):
-            self.env.step()
+            grasps = self.run_detection()
+            if not grasps:
+                print("  No grasp candidate found. Ending batch.")
+                break
 
-        # Phase 4: Lift
-        lift_z = wz + 0.25
-        print(f"  Phase 4: Lift -> z={lift_z:.3f}m")
-        self.env.robot.move_to_cartesian([wx, wy, lift_z], target_yaw=yaw, steps=120)
-        for _ in range(60):
-            self.env.step()
+            top = grasps[0]
+            self.grasp_attempts += 1
+            self.status_message = f"BATCH {i+1}/{total_to_pick}: GRASPING..."
+            self._update_3d_hud()
 
-        # Check if object was grasped (look if any object moved significantly upward)
-        grasped = False
-        for data in self.env.spawner.object_data:
-            try:
-                pos, _ = p.getBasePositionAndOrientation(data["id"])
-                if pos[2] > 0.10:
-                    grasped = True
-                    break
-            except Exception:
-                pass
+            res = self.executor.execute_pick_and_place(top, spawner=self.env.spawner)
+            if res["success"]:
+                self.successful_grasps += 1
+                picked_count += 1
+                print(f"  [Step {i+1}/{total_to_pick}] Successfully delivered to tray.")
+            else:
+                print(f"  [Step {i+1}/{total_to_pick}] Missed. Retrying next candidate...")
 
-        if grasped:
-            self.successful_grasps += 1
-            print(f"  Result: SUCCESS! Object lifted.")
-            # Move to tray and drop
-            print("  Phase 5: Moving to tray and releasing...")
-            self.env.robot.move_to_cartesian([0.5, 0.35, 0.3], target_yaw=0, steps=120)
-            for _ in range(30):
-                self.env.step()
-            # Open gripper
-            for g_idx in self.env.robot.gripper_joints:
-                p.setJointMotorControl2(
-                    self.env.robot.robot_id, g_idx,
-                    p.POSITION_CONTROL, targetPosition=0.04, force=20.0
-                )
-            for _ in range(60):
-                self.env.step()
+            self._update_3d_hud()
+
+        print(f"\n{'='*75}")
+        print(f"  {mode_name} FINISHED: {picked_count}/{total_to_pick} objects delivered to tray.")
+        print(f"{'='*75}\n")
+
+        self.status_message = f"BATCH COMPLETE: {picked_count}/{total_to_pick} DELIVERED"
+        self._update_3d_hud()
+
+        # Final fresh scan
+        if self.get_table_objects():
+            self.run_detection()
         else:
-            print(f"  Result: MISS - object not grasped.")
-
-        print(f"  Stats: {self.successful_grasps}/{self.grasp_attempts} successful grasps "
-              f"({100*self.successful_grasps/max(1,self.grasp_attempts):.0f}%)")
-
-        # Return robot home
-        print("  Returning robot to home position...")
-        self.env.robot.reset()
+            self.last_grasps.clear()
+            self._clear_grasp_markers()
 
     def respawn_objects(self):
-        """Clear and respawn objects with the current slider count."""
+        """Clear scene and spawn randomized objects matching the integer slider count."""
         num = int(round(p.readUserDebugParameter(self.slider_num_obj)))
-        num = max(1, min(num, 8))
-        print(f"\n[Respawn] Spawning {num} new random objects...")
+        num = max(1, min(8, num))
+        print(f"\n[Respawn] Spawning {num} new calibrated objects...")
         self._clear_grasp_markers()
         self.last_grasps = []
         self.env.reset(num_objects=num)
         for _ in range(60):
             self.env.step()
+        self.status_message = f"RESPAWNED {num} OBJECTS"
+        self._update_3d_hud()
         obj_info = self.env.spawner.get_object_info()
         print(f"  Spawned: {', '.join(o['name'] for o in obj_info)}")
 
     def run(self):
         """Main interactive loop."""
-        print("\n[Playground] Running... Use GUI controls or press Ctrl+C to exit.\n")
+        print("\n[Playground] Active! Use GUI controls on the right panel or press Ctrl+C to exit.\n")
 
         if self.show_dashboard:
-            # Create initial empty dashboard
             cv2.namedWindow("CPS Grasp Detection Dashboard", cv2.WINDOW_NORMAL)
-            cv2.resizeWindow("CPS Grasp Detection Dashboard", 800, 500)
+            cv2.resizeWindow("CPS Grasp Detection Dashboard", 820, 520)
 
-        frame_count = 0
+        # Track previous slider values to only move robot on explicit slider adjustment
+        prev_slider_vals = (
+            p.readUserDebugParameter(self.slider_x),
+            p.readUserDebugParameter(self.slider_y),
+            p.readUserDebugParameter(self.slider_z),
+            p.readUserDebugParameter(self.slider_yaw)
+        )
+        prev_spawn_n = int(round(p.readUserDebugParameter(self.slider_num_obj)))
+        prev_batch_n = int(round(p.readUserDebugParameter(self.slider_batch_count)))
+
         try:
             while True:
-                # Read robot control sliders and move arm
+                # 1. Check if configuration sliders changed to update 3D HUD
+                curr_spawn_n = int(round(p.readUserDebugParameter(self.slider_num_obj)))
+                curr_batch_n = int(round(p.readUserDebugParameter(self.slider_batch_count)))
+                if curr_spawn_n != prev_spawn_n or curr_batch_n != prev_batch_n:
+                    prev_spawn_n = curr_spawn_n
+                    prev_batch_n = curr_batch_n
+                    self._update_3d_hud()
+
+                # 2. Check manual arm sliders
                 tx = p.readUserDebugParameter(self.slider_x)
                 ty = p.readUserDebugParameter(self.slider_y)
                 tz = p.readUserDebugParameter(self.slider_z)
                 tyaw_deg = p.readUserDebugParameter(self.slider_yaw)
                 tyaw = np.radians(tyaw_deg)
+                curr_sliders = (tx, ty, tz, tyaw_deg)
 
-                self.env.robot.move_to_cartesian([tx, ty, tz], target_yaw=tyaw, steps=1)
+                if any(abs(c - p_val) > 0.005 for c, p_val in zip(curr_sliders, prev_slider_vals)):
+                    prev_slider_vals = curr_sliders
+                    self.env.robot.move_to_cartesian([tx, ty, tz], target_yaw=tyaw, steps=1)
 
-                # Check button presses
+                # 3. Check Action Button Clicks
+                # [1] Detect Grasps
                 curr_detect = p.readUserDebugParameter(self.btn_detect)
                 if curr_detect != self.prev_detect:
                     self.prev_detect = curr_detect
                     self.run_detection()
 
+                # [2] Execute Single Next Grasp
                 curr_execute = p.readUserDebugParameter(self.btn_execute)
                 if curr_execute != self.prev_execute:
                     self.prev_execute = curr_execute
-                    self.execute_grasp()
+                    self.execute_single_grasp()
 
+                # [3] Pick All (Clear Scene)
+                curr_pick_all = p.readUserDebugParameter(self.btn_pick_all)
+                if curr_pick_all != self.prev_pick_all:
+                    self.prev_pick_all = curr_pick_all
+                    self.batch_pick(target_count=None)
+
+                # [4] Pick Batch (Specified Count)
+                curr_batch_pick = p.readUserDebugParameter(self.btn_batch_pick)
+                if curr_batch_pick != self.prev_batch_pick:
+                    self.prev_batch_pick = curr_batch_pick
+                    batch_target = int(round(p.readUserDebugParameter(self.slider_batch_count)))
+                    self.batch_pick(target_count=batch_target)
+
+                # [5] Respawn Objects
                 curr_respawn = p.readUserDebugParameter(self.btn_respawn)
                 if curr_respawn != self.prev_respawn:
                     self.prev_respawn = curr_respawn
                     self.respawn_objects()
 
+                # [6] Reset Robot
                 curr_reset = p.readUserDebugParameter(self.btn_reset_robot)
                 if curr_reset != self.prev_reset_robot:
                     self.prev_reset_robot = curr_reset
-                    print("\n[Reset] Returning robot to home position...")
-                    self.env.robot.reset()
+                    print("\n[Reset] Returning robot arm smoothly to home posture...")
+                    self.env.robot.move_to_home(steps=60)
+                    prev_slider_vals = (
+                        p.readUserDebugParameter(self.slider_x),
+                        p.readUserDebugParameter(self.slider_y),
+                        p.readUserDebugParameter(self.slider_z),
+                        p.readUserDebugParameter(self.slider_yaw)
+                    )
+                    self.status_message = "ROBOT AT HOME"
+                    self._update_3d_hud()
 
                 self.env.step()
 
                 if self.show_dashboard:
-                    cv2.waitKey(1)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        print("\n[Dashboard] Quit requested by user ('q' key).")
+                        break
 
-                frame_count += 1
                 time.sleep(0.005)
 
         except KeyboardInterrupt:
@@ -397,11 +526,11 @@ class InteractivePlayground:
             if self.show_dashboard:
                 cv2.destroyAllWindows()
             self.env.close()
-            print("[Playground] Goodbye!")
+            print("[Playground] Simulation closed.")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CPS Interactive Simulation Playground")
+    parser = argparse.ArgumentParser(description="CPS Interactive Simulation Playground (Deliverable 2)")
     parser.add_argument("--num-objects", type=int, default=3, help="Initial number of objects (1-8)")
     parser.add_argument("--no-dashboard", action="store_true", help="Disable OpenCV dashboard window")
     parser.add_argument("--checkpoint", type=str,

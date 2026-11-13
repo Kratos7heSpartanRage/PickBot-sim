@@ -99,8 +99,11 @@ class GraspDetector:
         # Scale width (GG-CNN width output in pixels)
         width_map = np.clip(w_raw * 150.0, 20.0, 75.0)
 
-        # Focus quality map on object regions (depth slightly above table)
-        object_mask = (depth < (self.table_depth - 0.005))
+        # Focus quality map on object regions (depth between 5mm and 120mm above table surface)
+        # Prevents detecting overhead structures (robot arm/gripper at Z > 0.15m)
+        min_depth = self.table_depth - 0.12
+        max_depth = self.table_depth - 0.005
+        object_mask = (depth < max_depth) & (depth > min_depth)
         q_masked = q_smooth * object_mask.astype(np.float32)
 
         # Suppress image boundaries
