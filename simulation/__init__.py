@@ -4,3 +4,5 @@ from .robot import FrankaPandaRobot
 from .environment import GraspingEnvironment
 
 __all__ = ['OverheadCamera', 'ObjectSpawner', 'FrankaPandaRobot', 'GraspingEnvironment']
+
+from .grasp_executor import GraspExecutor
