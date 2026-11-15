@@ -63,9 +63,15 @@ def run_single_pick_trial(env, detector, executor, visualizer=None, place_in_tra
         "total_cycle_time_s": t_exec_end - t_start,
         "grasps_found": len(grasps),
         "top_quality": top_grasp.quality,
-        "grip_force": result.get("grip_force", 120.0 if result.get("success") else 0.0),
-        "lift_force": result.get("lift_force", 40.0 if result.get("success") else 0.0),
-        "descend_error_m": result.get("descend_error_m", 0.0)
+        "force_closure": result.get("force_closure", False),
+        "normal_force": result.get("normal_force", 0.0),
+        "friction_force": result.get("friction_force", 0.0),
+        "friction_angle_deg": result.get("friction_angle_deg", 0.0),
+        "friction_margin_pct": result.get("friction_margin_pct", 0.0),
+        "joint_torques": result.get("joint_torques", []),
+        "peak_joint": result.get("peak_joint", "J4"),
+        "peak_torque": result.get("peak_torque", 0.0),
+        "profile_plot": result.get("profile_plot")
     }
     return telemetry
 
@@ -78,10 +84,19 @@ def main():
     parser.add_argument("--clear-scene", action="store_true", help="Iteratively pick objects until table is cleared")
     parser.add_argument("--clutter-sweep", action="store_true", help="Evaluate across clutter levels 1, 3, and 5 objects")
     parser.add_argument("--no-tray", action="store_true", help="Skip placing objects in the collection tray")
+    parser.add_argument("--benchmark", action="store_true", help="Run Deliverable 2 Physical Pick-and-Place Execution Benchmark against baselines")
+    parser.add_argument("--benchmark-trials", type=int, default=10, help="Number of trials per clutter level for benchmark")
     parser.add_argument("--checkpoint", type=str,
                         default="checkpoints/ggcnn_weights_cornell/ggcnn_epoch_23_cornell_statedict.pt",
                         help="Path to trained GG-CNN model weights")
     args = parser.parse_args()
+
+    # If user requested physical execution benchmark:
+    if args.benchmark:
+        from evaluation.physical_benchmark import run_physical_benchmark
+        clutters = (1, 3, 5) if args.clutter_sweep else (args.num_objects,)
+        run_physical_benchmark(num_trials=args.benchmark_trials, clutter_levels=clutters)
+        return
 
     print("=" * 80)
     print("  CYBER PHYSICAL SYSTEMS: PROJECT DELIVERABLE 2")

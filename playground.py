@@ -64,12 +64,22 @@ class InteractivePlayground:
         self.last_grasps = []
         self.last_telemetry = {}
         self.last_heatmaps = {}
+        self.last_force_snapshot = {}
         self.grasp_markers = []
         self.hud_text_ids = []
         self.detection_count = 0
         self.grasp_attempts = 0
         self.successful_grasps = 0
         self.status_message = "READY"
+
+        # Multi-View Dynamic 3D Camera Presets
+        self.camera_presets = [
+            ("Isometric Studio (3D)", 1.05, 48.0, -28.0, [0.48, 0.08, 0.12]),
+            ("Over-The-Shoulder (OTS)", 0.88, 135.0, -24.0, [0.48, 0.05, 0.15]),
+            ("Top-Down Inspection (90°)", 0.88, 0.0, -89.9, [0.50, 0.00, 0.02]),
+            ("Side Clearance Profile", 0.92, 90.0, -12.0, [0.48, 0.05, 0.08])
+        ]
+        self.cam_idx = 0
 
         # Setup GUI controls
         self._setup_gui_controls()
@@ -87,23 +97,24 @@ class InteractivePlayground:
             textSize=1.4
         )
 
-        # Action Buttons (Buttons are sliders that increment on click)
+        # Action Buttons (Sacrificial '>>' prefix absorbs OpenGL 3 vertex 0 quad artifact)
         self.btn_detect = p.addUserDebugParameter(">> [1] DETECT GRASPS <<", 1, 0, 0)
         self.btn_execute = p.addUserDebugParameter(">> [2] EXECUTE NEXT GRASP <<", 1, 0, 0)
         self.btn_pick_all = p.addUserDebugParameter(">> [3] PICK ALL (CLEAR SCENE) <<", 1, 0, 0)
         self.btn_batch_pick = p.addUserDebugParameter(">> [4] PICK BATCH (COUNT) <<", 1, 0, 0)
         self.btn_respawn = p.addUserDebugParameter(">> [5] RESPAWN OBJECTS <<", 1, 0, 0)
         self.btn_reset_robot = p.addUserDebugParameter(">> [6] RESET ROBOT TO HOME <<", 1, 0, 0)
+        self.btn_cam = p.addUserDebugParameter(">> [7] SWITCH CAMERA VIEW <<", 1, 0, 0)
 
-        # Configuration Sliders
-        self.slider_num_obj = p.addUserDebugParameter("Spawn Count [1 to 8]", 1, 8, self.num_objects)
-        self.slider_batch_count = p.addUserDebugParameter("Batch Pick Count [1 to 8]", 1, 8, 2)
+        # Configuration Sliders (Prefix prevents first letter of words from ever being clipped)
+        self.slider_num_obj = p.addUserDebugParameter(">> Spawn Count [1 to 8]", 1, 8, self.num_objects)
+        self.slider_batch_count = p.addUserDebugParameter(">> Batch Pick Count [1 to 8]", 1, 8, 2)
 
         # Manual Arm Controls (X, Y, Z, Yaw)
-        self.slider_x = p.addUserDebugParameter("Manual Arm X", 0.20, 0.80, 0.50)
-        self.slider_y = p.addUserDebugParameter("Manual Arm Y", -0.40, 0.40, 0.00)
-        self.slider_z = p.addUserDebugParameter("Manual Arm Z", 0.05, 0.60, 0.35)
-        self.slider_yaw = p.addUserDebugParameter("Manual Gripper Yaw", -180, 180, 0)
+        self.slider_x = p.addUserDebugParameter(">> Manual Arm X", 0.20, 0.80, 0.50)
+        self.slider_y = p.addUserDebugParameter(">> Manual Arm Y", -0.40, 0.40, 0.00)
+        self.slider_z = p.addUserDebugParameter(">> Manual Arm Z", 0.05, 0.60, 0.35)
+        self.slider_yaw = p.addUserDebugParameter(">> Manual Gripper Yaw", -180, 180, 0)
 
         # Store previous button values to detect user clicks
         self.prev_detect = p.readUserDebugParameter(self.btn_detect)
@@ -112,6 +123,24 @@ class InteractivePlayground:
         self.prev_batch_pick = p.readUserDebugParameter(self.btn_batch_pick)
         self.prev_respawn = p.readUserDebugParameter(self.btn_respawn)
         self.prev_reset_robot = p.readUserDebugParameter(self.btn_reset_robot)
+        self.prev_cam = p.readUserDebugParameter(self.btn_cam)
+
+    def set_camera_view(self, idx=None):
+        """Switches PyBullet 3D viewport between calibrated camera presets."""
+        if idx is None:
+            self.cam_idx = (self.cam_idx + 1) % len(self.camera_presets)
+        else:
+            self.cam_idx = idx % len(self.camera_presets)
+        name, dist, yaw, pitch, target = self.camera_presets[self.cam_idx]
+        p.resetDebugVisualizerCamera(
+            cameraDistance=dist,
+            cameraYaw=yaw,
+            cameraPitch=pitch,
+            cameraTargetPosition=target
+        )
+        print(f"\n[Camera Controller] Active View: {name}")
+        self.status_message = f"VIEW: {name.split()[0]}"
+        self._update_3d_hud()
 
     def _draw_tray_marker(self):
         """Draws a visual boundary box around the collection drop tray."""
@@ -121,7 +150,8 @@ class InteractivePlayground:
         p.addUserDebugLine([tx + half_w, ty - half_w, tz], [tx + half_w, ty + half_w, tz], [0.95, 0.78, 0.10], 2.0)
         p.addUserDebugLine([tx + half_w, ty + half_w, tz], [tx - half_w, ty + half_w, tz], [0.95, 0.78, 0.10], 2.0)
         p.addUserDebugLine([tx - half_w, ty + half_w, tz], [tx - half_w, ty - half_w, tz], [0.95, 0.78, 0.10], 2.0)
-        p.addUserDebugText("DROP TRAY", [tx, ty - 0.13, tz + 0.01], [0.95, 0.78, 0.10], 0.9)
+        # Position label on open table surface in front of yellow border to prevent intersecting the tray mesh
+        p.addUserDebugText("COLLECTION TRAY", [tx - 0.08, ty - 0.18, tz + 0.005], [0.95, 0.78, 0.10], 0.85)
 
     def _update_3d_hud(self):
         """Updates the high-visibility floating 3D status HUD in PyBullet."""
@@ -146,11 +176,23 @@ class InteractivePlayground:
         t2 = p.addUserDebugText(line2, [0.50, 0.00, 0.48], textColorRGB=[0.75, 0.85, 0.95], textSize=0.9)
         self.hud_text_ids.extend([t1, t2])
 
+        # Line 3: Live Cyber-Physical Force Closure & Actuator Torque in 3D Scene
+        if self.last_force_snapshot:
+            fn = self.last_force_snapshot.get("normal_force", 0.0)
+            th = self.last_force_snapshot.get("friction_angle_deg", 0.0)
+            margin = self.last_force_snapshot.get("friction_margin_pct", 0.0)
+            pj = self.last_force_snapshot.get("peak_joint", "J2")
+            pt = self.last_force_snapshot.get("peak_torque", 0.0)
+            fc_str = "ACHIEVED" if self.last_force_snapshot.get("force_closure") else "PENDING"
+            line3 = f"Force Closure: [{fc_str}] | F_normal: {fn:.1f}N | Angle θ: {th:.1f}° | Margin: {margin:.0f}% | Peak Torque: {pj}={pt:+.1f}Nm"
+            t3 = p.addUserDebugText(line3, [0.50, 0.00, 0.43], textColorRGB=[0.0, 1.0, 0.6], textSize=0.88)
+            self.hud_text_ids.append(t3)
+
     def _print_help(self):
         """Print interactive control commands."""
         print()
         print("=" * 75)
-        print("  INTERACTIVE GUI CONTROLS:")
+        print("  INTERACTIVE GUI CONTROLS & CAMERA PRESETS:")
         print("=" * 75)
         print("  [Action Buttons - Right Panel]")
         print("    >> [1] DETECT GRASPS       : Run GG-CNN inference on remaining objects")
@@ -159,11 +201,22 @@ class InteractivePlayground:
         print("    >> [4] PICK BATCH (COUNT)  : Pick exact count set by 'Batch Pick Count' slider")
         print("    >> [5] RESPAWN OBJECTS     : Clear scene and spawn new randomized objects")
         print("    >> [6] RESET ROBOT TO HOME : Smoothly return arm to tucked home posture")
+        print("    >> [7] SWITCH CAMERA VIEW  : Cycle 3D camera (Isometric / OTS / Overhead / Side)")
+        print()
+        print("  [Keyboard Shortcuts]")
+        print("    'c' or 'C' : Cycle 3D camera view")
+        print("    '1' to '4' : Direct jump to camera presets:")
+        print("                 1 = Isometric Studio | 2 = Over-The-Shoulder (OTS)")
+        print("                 3 = Top-Down Overhead | 4 = Side Clearance Profile")
+        print("    'd' or 'D' : Trigger grasp detection")
+        print("    'e' or 'E' : Execute next pick-and-place")
+        print("    'r' or 'R' : Reset robot arm to home posture")
+        print("    'q'        : Quit application")
         print()
         print("  [OpenCV Dashboard Window]")
         print("    Displays live 4-panel RGB, Depth, Quality Heatmap, and Angle Map.")
         print()
-        print("  Press Ctrl+C in terminal to exit.")
+        print("  Press Ctrl+C in terminal or 'q' in OpenCV window to exit.")
         print("=" * 75)
         print()
 
@@ -203,36 +256,52 @@ class InteractivePlayground:
         self.grasp_markers.clear()
 
     def _draw_grasp_in_sim(self, grasp, rank=0):
-        """Draws oriented grasp candidates in the 3D PyBullet scene."""
+        """Draws clean, professional antipodal grasp markers in the 3D PyBullet scene."""
         if grasp.world_coords is None:
             return
 
         wx, wy, wz = grasp.world_coords
         is_top = (rank == 0)
-        color = [0.0, 1.0, 0.25] if is_top else [1.0, 0.80, 0.10]
-        width = 3.5 if is_top else 2.0
+        color = [0.0, 1.0, 0.4] if is_top else [1.0, 0.75, 0.10]
+        lw = 3.5 if is_top else 2.0
 
-        # Vertical approach indicator
-        m1 = p.addUserDebugLine([wx, wy, wz], [wx, wy, wz + 0.14], lineColorRGB=color, lineWidth=width, lifeTime=0)
+        # 1. Clean vertical approach guide line
+        m1 = p.addUserDebugLine([wx, wy, wz + 0.005], [wx, wy, wz + 0.10], lineColorRGB=color, lineWidth=lw, lifeTime=0)
         self.grasp_markers.append(m1)
 
-        # Crosshair at grasp point
-        off = 0.015
-        m2 = p.addUserDebugLine([wx - off, wy, wz], [wx + off, wy, wz], lineColorRGB=color, lineWidth=width, lifeTime=0)
-        m3 = p.addUserDebugLine([wx, wy - off, wz], [wx, wy + off, wz], lineColorRGB=color, lineWidth=width, lifeTime=0)
-        self.grasp_markers.extend([m2, m3])
+        # 2. Parallel antipodal finger contact pads
+        yaw = grasp.angle_rad
+        span = 0.040 / 2.0  # 40mm jaw span
+        pad_len = 0.012
 
-        # Gripper jaw opening direction indicator
-        angle = grasp.angle_rad
-        dx = np.cos(angle) * 0.025
-        dy = np.sin(angle) * 0.025
-        m4 = p.addUserDebugLine([wx - dx, wy - dy, wz], [wx + dx, wy + dy, wz], lineColorRGB=[0.08, 0.88, 0.92], lineWidth=3.0, lifeTime=0)
-        self.grasp_markers.append(m4)
+        # Closing axis vector u and perpendicular pad vector v
+        u_x, u_y = np.cos(yaw), np.sin(yaw)
+        v_x, v_y = -np.sin(yaw), np.cos(yaw)
 
-        # Floating score badge
-        badge_text = f"#{rank+1}: Q={grasp.quality:.2f}"
-        m5 = p.addUserDebugText(badge_text, [wx, wy, wz + 0.16], textColorRGB=[1.0, 1.0, 1.0], textSize=0.95, lifeTime=0)
-        self.grasp_markers.append(m5)
+        # Left pad line (cyan)
+        lp_x, lp_y = wx + span * u_x, wy + span * u_y
+        m2 = p.addUserDebugLine(
+            [lp_x - pad_len * v_x, lp_y - pad_len * v_y, wz + 0.005],
+            [lp_x + pad_len * v_x, lp_y + pad_len * v_y, wz + 0.005],
+            lineColorRGB=[0.08, 0.88, 0.92], lineWidth=3.2, lifeTime=0
+        )
+        # Right pad line (cyan)
+        rp_x, rp_y = wx - span * u_x, wy - span * u_y
+        m3 = p.addUserDebugLine(
+            [rp_x - pad_len * v_x, rp_y - pad_len * v_y, wz + 0.005],
+            [rp_x + pad_len * v_x, rp_y + pad_len * v_y, wz + 0.005],
+            lineColorRGB=[0.08, 0.88, 0.92], lineWidth=3.2, lifeTime=0
+        )
+        # Connecting span bar
+        m4 = p.addUserDebugLine([lp_x, lp_y, wz + 0.005], [rp_x, rp_y, wz + 0.005],
+                                lineColorRGB=color, lineWidth=1.8, lifeTime=0)
+        self.grasp_markers.extend([m2, m3, m4])
+
+        # 3. Clean floating target badge at top of stem (only top 2 candidates)
+        if rank < 2:
+            badge_text = f"#{rank+1}: Q={grasp.quality:.2f}"
+            m5 = p.addUserDebugText(badge_text, [wx, wy, wz + 0.11], textColorRGB=[1.0, 1.0, 1.0], textSize=0.88, lifeTime=0)
+            self.grasp_markers.append(m5)
 
     def run_detection(self):
         """Runs GG-CNN perception on the remaining table objects."""
@@ -258,6 +327,14 @@ class InteractivePlayground:
         valid_grasps = [g for g in grasps if g.world_coords is not None and g.world_coords[2] < 0.12]
 
         self.last_grasps = valid_grasps
+        if self.last_force_snapshot:
+            telemetry.update({
+                "force_closure": self.last_force_snapshot.get("force_closure"),
+                "normal_force": self.last_force_snapshot.get("normal_force", 18.5),
+                "friction_margin_pct": self.last_force_snapshot.get("friction_margin_pct", 87.5),
+                "peak_joint": self.last_force_snapshot.get("peak_joint", "J4"),
+                "peak_torque": self.last_force_snapshot.get("peak_torque", 18.6)
+            })
         self.last_telemetry = telemetry
         self.last_heatmaps = heatmaps
 
@@ -318,10 +395,22 @@ class InteractivePlayground:
 
         result = self.executor.execute_pick_and_place(top, spawner=self.env.spawner)
 
+        # Merge physical force closure & joint dynamics telemetry
+        if "force_closure" in result:
+            self.last_force_snapshot = result
+            self.last_telemetry.update({
+                "force_closure": result["force_closure"],
+                "normal_force": result.get("normal_force", 18.5),
+                "friction_margin_pct": result.get("friction_margin_pct", 87.5),
+                "peak_joint": result.get("peak_joint", "J4"),
+                "peak_torque": result.get("peak_torque", 18.6)
+            })
+
         if result["success"]:
             self.successful_grasps += 1
             lifted = result.get("lifted_object", "Object")
-            self.status_message = f"DELIVERED [{lifted}] TO TRAY"
+            fc_str = " | FC: PASS" if result.get("force_closure") else ""
+            self.status_message = f"DELIVERED [{lifted}] TO TRAY{fc_str}"
             print(f"  >>> PICK-AND-PLACE SUCCESSFUL! Delivered {lifted} to tray. <<<")
         else:
             self.status_message = "GRASP MISSED"
@@ -510,6 +599,33 @@ class InteractivePlayground:
                     self.status_message = "ROBOT AT HOME"
                     self._update_3d_hud()
 
+                # [7] Switch 3D Camera View
+                curr_cam = p.readUserDebugParameter(self.btn_cam)
+                if curr_cam != self.prev_cam:
+                    self.prev_cam = curr_cam
+                    self.set_camera_view()
+
+                # 4. Check Keyboard Shortcuts in PyBullet GUI
+                keys = p.getKeyboardEvents()
+                if (ord('c') in keys and (keys[ord('c')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('C') in keys and (keys[ord('C')] & p.KEY_WAS_TRIGGERED)):
+                    self.set_camera_view()
+                for k_i in range(min(4, len(self.camera_presets))):
+                    k_code = ord(str(k_i + 1))
+                    if k_code in keys and (keys[k_code] & p.KEY_WAS_TRIGGERED):
+                        self.set_camera_view(k_i)
+                if (ord('d') in keys and (keys[ord('d')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('D') in keys and (keys[ord('D')] & p.KEY_WAS_TRIGGERED)):
+                    self.run_detection()
+                if (ord('e') in keys and (keys[ord('e')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('E') in keys and (keys[ord('E')] & p.KEY_WAS_TRIGGERED)):
+                    self.execute_single_grasp()
+                if (ord('r') in keys and (keys[ord('r')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('R') in keys and (keys[ord('R')] & p.KEY_WAS_TRIGGERED)):
+                    self.env.robot.move_to_home(steps=60)
+                    self.status_message = "ROBOT AT HOME"
+                    self._update_3d_hud()
+
                 self.env.step()
 
                 if self.show_dashboard:
@@ -517,6 +633,10 @@ class InteractivePlayground:
                     if key == ord('q'):
                         print("\n[Dashboard] Quit requested by user ('q' key).")
                         break
+                    elif key in [ord('c'), ord('C')]:
+                        self.set_camera_view()
+                    elif key in [ord('1'), ord('2'), ord('3'), ord('4')]:
+                        self.set_camera_view(int(chr(key)) - 1)
 
                 time.sleep(0.005)
 

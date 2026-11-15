@@ -41,10 +41,10 @@ class GraspingEnvironment:
         # 1. Studio Lighting, Soft Shadows, and 3D Visualizer Configuration
         if self.gui:
             p.resetDebugVisualizerCamera(
-                cameraDistance=1.4,
-                cameraYaw=50.0,
-                cameraPitch=-35.0,
-                cameraTargetPosition=[0.48, 0.05, 0.10]
+                cameraDistance=1.05,
+                cameraYaw=48.0,
+                cameraPitch=-28.0,
+                cameraTargetPosition=[0.48, 0.08, 0.12]
             )
             # Eval 2 spec: studio lighting & soft shadow parameters
             p.configureDebugVisualizer(
@@ -62,6 +62,41 @@ class GraspingEnvironment:
         # Calibrated table basePosition [0.5, 0.0, -0.626] puts table top surface at Z=0.000m
         self.table_top_z = 0.0
         self.plane_id = p.loadURDF("plane.urdf", [0.0, 0.0, -0.626])
+        p.changeVisualShape(self.plane_id, -1, rgbaColor=[0.14, 0.16, 0.18, 1.0])
+
+        # Industrial Workcell Base Platform under robot and table
+        vis_platform = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=[0.85, 0.70, 0.005],
+            rgbaColor=[0.20, 0.22, 0.25, 1.0]  # Dark matte epoxy platform
+        )
+        self.platform_id = p.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=-1,
+            baseVisualShapeIndex=vis_platform,
+            basePosition=[0.35, 0.12, -0.626 + 0.005]
+        )
+
+        # Industrial Robot Mounting Pedestal (Extends from floor Z=-0.626 to robot base Z=0.000)
+        pedestal_h = 0.626
+        vis_pedestal = p.createVisualShape(
+            p.GEOM_CYLINDER,
+            radius=0.13,
+            length=pedestal_h,
+            rgbaColor=[0.22, 0.24, 0.26, 1.0]  # Dark industrial anodized aluminum
+        )
+        col_pedestal = p.createCollisionShape(
+            p.GEOM_CYLINDER,
+            radius=0.13,
+            height=pedestal_h
+        )
+        self.pedestal_id = p.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=col_pedestal,
+            baseVisualShapeIndex=vis_pedestal,
+            basePosition=[0.0, 0.0, -pedestal_h / 2.0]
+        )
+
         self.table_id = p.loadURDF("table/table.urdf", [0.5, 0.0, -0.626], useFixedBase=True)
 
         # High-friction table contact physics
@@ -126,7 +161,7 @@ class GraspingEnvironment:
         )
 
     def _draw_workspace_bounds(self):
-        """Draws crisp accent border lines around active picking workspace."""
+        """Draws crisp accent border lines around active picking workspace and safety perimeter."""
         x_lo, x_hi = 0.35, 0.65
         y_lo, y_hi = -0.20, 0.20
         z = 0.002
@@ -136,6 +171,17 @@ class GraspingEnvironment:
         p.addUserDebugLine([x_hi, y_lo, z], [x_hi, y_hi, z], lineColorRGB=accent_color, lineWidth=line_w, lifeTime=0)
         p.addUserDebugLine([x_hi, y_hi, z], [x_lo, y_hi, z], lineColorRGB=accent_color, lineWidth=line_w, lifeTime=0)
         p.addUserDebugLine([x_lo, y_hi, z], [x_lo, y_lo, z], lineColorRGB=accent_color, lineWidth=line_w, lifeTime=0)
+
+        # Workcell Safety Perimeter (Yellow caution boundary matching ISO 10218 standard)
+        px, py = 0.35, 0.12
+        hx, hy = 0.85, 0.70
+        z_floor = -0.620  # Slightly above floor
+        yellow = [0.95, 0.78, 0.10]
+        p.addUserDebugLine([px - hx, py - hy, z_floor], [px + hx, py - hy, z_floor], lineColorRGB=yellow, lineWidth=3.0, lifeTime=0)
+        p.addUserDebugLine([px + hx, py - hy, z_floor], [px + hx, py + hy, z_floor], lineColorRGB=yellow, lineWidth=3.0, lifeTime=0)
+        p.addUserDebugLine([px + hx, py + hy, z_floor], [px - hx, py + hy, z_floor], lineColorRGB=yellow, lineWidth=3.0, lifeTime=0)
+        p.addUserDebugLine([px - hx, py + hy, z_floor], [px - hx, py - hy, z_floor], lineColorRGB=yellow, lineWidth=3.0, lifeTime=0)
+        p.addUserDebugText("SAFETY WORKCELL PERIMETER", [px, py - hy - 0.08, z_floor + 0.01], textColorRGB=yellow, textSize=0.85, lifeTime=0)
 
     def reset(self, num_objects=3):
         """Resets robot arm to neutral tucked home pose and spawns calibrated objects."""

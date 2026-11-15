@@ -278,19 +278,35 @@ class Visualizer:
         cv2.putText(hud, badge_text, (grid_w - bw - 20, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.48, col, 1, cv2.LINE_AA)
 
         # -------------------------------------------------------------
-        # Bottom Command Bar & Validator Breakdown
+        # Bottom Command Bar & Cyber-Physical Telemetry Breakdown
         # -------------------------------------------------------------
         val_meta = telemetry.get('validation') or {}
         c_score = val_meta.get('clearance_score', 0.85)
         a_score = val_meta.get('antipodal_score', 0.90)
         k_score = val_meta.get('kinematic_score', 1.00)
 
-        bar_h = 32
+        fc_status = telemetry.get('force_closure')
+        fc_fn = telemetry.get('normal_force')
+        fc_margin = telemetry.get('friction_margin_pct')
+        peak_j = telemetry.get('peak_joint', 'J4')
+        peak_tau = telemetry.get('peak_torque')
+
+        bar_h = 36
         bar = np.full((bar_h, grid_w, 3), 20, dtype=np.uint8)
-        bar_text = (f"VALIDATOR STATUS: Clearance: {c_score:.2f} (PASS) | "
-                    f"Friction Cone: {a_score:.2f} (PASS) | IK Reachable: {k_score:.2f} (PASS) | "
-                    f"Controls: [1] Detect  [2] Next Pick  [3] Clear Scene  [q] Quit")
-        cv2.putText(bar, bar_text, (16, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (170, 185, 195), 1, cv2.LINE_AA)
+
+        if fc_status is not None:
+            fc_str = "ACHIEVED" if fc_status else "ACTIVE"
+            bar_text = (f"CPS CONTACT & DYNAMICS: Force Closure: [{fc_str}] | "
+                        f"F_normal: {fc_fn:.1f}N | Friction Margin: {fc_margin:.1f}% | "
+                        f"Actuator Peak Torque: {peak_j}={peak_tau:+.1f}N*m | Controls: [1] Detect [2] Pick")
+            bar_color = (0, 240, 180) if fc_status else (220, 220, 100)
+        else:
+            bar_text = (f"VALIDATOR STATUS: Clearance: {c_score:.2f} (PASS) | "
+                        f"Friction Cone: {a_score:.2f} (PASS) | IK Reachable: {k_score:.2f} (PASS) | "
+                        f"Controls: [1] Detect  [2] Next Pick  [3] Clear Scene  [q] Quit")
+            bar_color = (170, 185, 195)
+
+        cv2.putText(bar, bar_text, (16, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.40, bar_color, 1, cv2.LINE_AA)
 
         dashboard = np.vstack([hud, grid, bar])
         return dashboard

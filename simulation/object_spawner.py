@@ -364,7 +364,7 @@ class ObjectSpawner:
         return self.spawned_ids
 
     def _draw_hud_labels(self):
-        """Draws minimal, stylish floating 3D text labels (z = settled_z + 0.07m)."""
+        """Draws minimal, augmented-reality numbered target pins above settled objects."""
         for txt_id in self.hud_text_ids:
             try:
                 p.removeUserDebugItem(txt_id)
@@ -374,16 +374,23 @@ class ObjectSpawner:
 
         for i, data in enumerate(self.object_data):
             pos = data["settled_pos"]
-            label_text = f"{i + 1}: {data['name']}"
-            label_pos = [pos[0], pos[1], pos[2] + 0.07]
-            txt_id = p.addUserDebugText(
-                label_text,
-                label_pos,
-                textColorRGB=[1.0, 1.0, 1.0],
-                textSize=0.9,
+            z_top = pos[2] + 0.045
+            # Clean vertical targeting pin
+            line_id = p.addUserDebugLine(
+                [pos[0], pos[1], pos[2] + 0.01],
+                [pos[0], pos[1], z_top],
+                lineColorRGB=[0.08, 0.88, 0.92],
+                lineWidth=2.0,
                 lifeTime=0
             )
-            self.hud_text_ids.append(txt_id)
+            txt_id = p.addUserDebugText(
+                f"[{i + 1}]",
+                [pos[0], pos[1], z_top + 0.005],
+                textColorRGB=[0.08, 0.88, 0.92],
+                textSize=0.85,
+                lifeTime=0
+            )
+            self.hud_text_ids.extend([line_id, txt_id])
 
     def get_ground_truth_grasps(self, camera):
         """
