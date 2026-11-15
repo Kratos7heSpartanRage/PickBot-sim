@@ -164,6 +164,10 @@
 
 ```
 Cyber Physical Systems/
+├── docs/                           # Documentation, project map & teammate guides
+│   ├── Deliverable2_Guide_Satyam.docx # Formatted Word guide for teammate (Eval 2)
+│   ├── DELIVERABLE2_SPECIFICATION.md  # Detailed specification & division of work
+│   └── ICPS_ProjectMap.pdf         # Course project roadmap specification
 ├── models/
 │   ├── __init__.py
 │   └── ggcnn.py                    # GG-CNN PyTorch architecture & multi-task loss
@@ -172,11 +176,13 @@ Cyber Physical Systems/
 │   ├── camera.py                   # Calibrated overhead camera with 2D→3D deprojection
 │   ├── object_spawner.py           # Diverse URDF + procedural object spawner with GT grasps
 │   ├── robot.py                    # Franka Emika Panda 7-DOF arm loader & IK solver
+│   ├── grasp_executor.py           # 4-phase pick-and-place execution & contact monitor
 │   └── environment.py             # PyBullet picking scene (table, tray, workspace markers)
 ├── perception/
 │   ├── __init__.py
 │   ├── grasp_geometry.py           # Grasp data class, Cornell IoU & angle metrics
 │   ├── detector.py                 # Real-time grasp detection engine & NMS
+│   ├── dashboard.py                # OpenCV / X11 display wrapper
 │   └── visualizer.py              # 4-panel dashboard and OpenCV HUD generator
 ├── evaluation/
 │   ├── __init__.py
@@ -192,10 +198,22 @@ Cyber Physical Systems/
 │   └── ggcnn_finetuned.pt          # Fine-tuned PyBullet checkpoint
 ├── outputs/
 │   ├── deliverable1_clutter_1.png  # 4-panel demo: 1 object
+│   ├── deliverable1_clutter_2.png  # 4-panel demo: 2 objects
 │   ├── deliverable1_clutter_3.png  # 4-panel demo: 3 objects
 │   ├── deliverable1_clutter_5.png  # 4-panel demo: 5 objects
 │   └── benchmark_results.png      # Benchmark comparison bar charts
-├── run_deliverable1.py             # Main Deliverable 1 entry point
+├── tests/                          # Standalone diagnostic & regression test suite
+│   ├── check_seg.py                # Verifies semantic segmentation IDs
+│   ├── check_urdfs.py              # Catalog of available PyBullet URDF assets
+│   ├── inspect_ckpt.py             # Inspects GG-CNN checkpoint weights
+│   ├── inspect_depth.py            # Calibrates overhead depth and table height
+│   ├── test_crop.py                # Tests workspace cropping & object masking
+│   ├── test_model_load.py          # Verifies tensor flow through GG-CNN
+│   ├── test_norm.py                # Verifies Morrison depth normalization
+│   ├── test_zoom.py                # Workspace framing & pinhole deprojection test
+│   └── test_zoom2.py               # End-to-end perception test on active scene
+├── run_deliverable1.py             # Main Deliverable 1 entry point (Perception)
+├── run_deliverable2.py             # Main Deliverable 2 entry point (Autonomous Pick-and-Place)
 ├── playground.py                   # Interactive simulation playground
 ├── requirements.txt
 └── README.md
@@ -274,6 +292,34 @@ Cyber Physical Systems/
   | `--align-robot` | Position Franka arm above detected grasp |
   | `--continuous` | Run real-time perception loop with live dashboard |
   | `--checkpoint PATH` | Path to model weights file |
+
+### Deliverable 2 Demonstration (Autonomous Pick-and-Place)
+
+- **Run autonomous pick-and-place trial in 3D GUI:**
+  ```bash
+  python run_deliverable2.py --gui --num-objects 1 --trials 3
+  ```
+
+- **Run iterative scene clearing** (robot autonomously clears table into collection tray):
+  ```bash
+  python run_deliverable2.py --gui --num-objects 3 --clear-scene
+  ```
+
+- **Run multi-clutter sweep benchmark** (evaluates physical lift success across 1, 3, and 5 objects):
+  ```bash
+  python run_deliverable2.py --clutter-sweep --trials 5
+  ```
+
+- **All Deliverable 2 CLI flags:**
+  | Flag | Description |
+  |------|-------------|
+  | `--gui` | Launch PyBullet 3D GUI window |
+  | `--num-objects N` | Number of objects to spawn (1 to 5) |
+  | `--trials N` | Number of repeated autonomous pick-and-place trials |
+  | `--clear-scene` | Iteratively pick objects until the entire table is cleared into tray |
+  | `--clutter-sweep` | Evaluate physical grasping across clutter levels (1, 3, 5 objects) |
+  | `--no-tray` | Skip placing lifted objects into the collection tray |
+  | `--checkpoint PATH` | Path to trained GG-CNN weights |
 
 ### Interactive Playground v2.0
 
@@ -370,6 +416,12 @@ Cyber Physical Systems/
   - `reset()` — return to home posture
   - `get_ee_pose()` — current end-effector state
 
+### `simulation/grasp_executor.py`
+- **`GraspExecutor`** — Robust pick-and-place logic controller
+  - Intelligent 4-phase execution (Approach → Descend → Grip → Lift)
+  - Collision-aware finger depth constraint to accommodate large objects
+  - Real-time contact force feedback monitoring and verification
+
 ### `simulation/camera.py`
 - **`OverheadCamera`** — simulated overhead RGB-D camera
   - Captures RGB (300×300×3), metric depth, and segmentation mask
@@ -397,6 +449,11 @@ Cyber Physical Systems/
   - Panel 3: Grasp quality heatmap (Inferno colormap) with peak markers
   - Panel 4: Gripper orientation angle map (HSV colormap)
   - Top HUD banner with live telemetry
+
+### `perception/dashboard.py`
+- **`DashboardWindow`** — Thread-safe X11/Qt display wrapper
+  - Safely proxies OpenCV `imshow` calls to the main thread
+  - Seamlessly gracefully degrades to headless file-saving mode if WSL graphics crash
 
 ### `evaluation/baselines.py`
 - **Random Grasp** — uniformly random pixel + angle selection
@@ -448,10 +505,10 @@ Cyber Physical Systems/
 
   | Method | Success Rate (%) | Mean Quality Q | Latency (ms) | Throughput (FPS) |
   |--------|:---:|:---:|:---:|:---:|
-  | Random Grasp | 41.7% | 0.296 | 0.26 | ~3800 |
-  | Centroid Heuristic | 100.0% | 0.650 | 0.31 | ~3200 |
-  | Depth Antipodal | 91.7% | 0.720 | 1.13 | ~880 |
-  | **GG-CNN (Ours)** | **80.0%** | **0.530–0.865** | **2.47** | **~405** |
+  | Random Grasp | 8.3% | 0.299 | 0.85 | ~1170 |
+  | Centroid Heuristic | 41.7% | 0.650 | 0.30 | ~3333 |
+  | Depth Antipodal | 31.7% | 0.720 | 2.67 | ~374 |
+  | **GG-CNN (Ours)** | **100.0%** | **0.701** | **17.00** | **~58** |
 
 - **Key insights:**
   - At **2.47 ms** on RTX 3050, the CNN operates well within the 10 ms real-time threshold for 100 Hz closed-loop robotic control
@@ -473,7 +530,7 @@ Cyber Physical Systems/
 - Interactive playground with live visualization
 - Benchmarked against 3 baselines
 
-### Deliverable 2 — Autonomous Pick-and-Place Execution (Planned)
+### Deliverable 2 — Autonomous Pick-and-Place Execution (In Progress)
 
 - Predicted 3D grasp coordinates used as robot arm waypoints
 - Motion sequence:

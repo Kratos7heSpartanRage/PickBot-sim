@@ -1,5 +1,6 @@
 import numpy as np
 import pybullet as p
+import cv2
 
 class OverheadCamera:
     """
@@ -48,30 +49,61 @@ class OverheadCamera:
             [0.0,  0.0, 1.0]
         ], dtype=float)
 
-    def capture(self):
+    def capture(self, ssaa=True):
         """
         Captures RGB, linear metric Depth, and segmentation mask.
+        When ssaa=True (Supersampling Anti-Aliasing), renders at 2x resolution
+        and area-downsamples to eliminate pixelated/aliased object boundaries.
         """
+        if ssaa and (self.img_w <= 400):
+            render_w = self.img_w * 2
+            render_h = self.img_h * 2
+        else:
+            render_w = self.img_w
+            render_h = self.img_h
+
         _, _, rgb_raw, depth_raw, seg_raw = p.getCameraImage(
-            width=self.img_w,
-            height=self.img_h,
+            width=render_w,
+            height=render_h,
             viewMatrix=self.view_matrix,
             projectionMatrix=self.proj_matrix,
             renderer=p.ER_BULLET_HARDWARE_OPENGL
         )
 
-        # RGB image [H, W, 3] in uint8
-        rgb = np.array(rgb_raw, dtype=np.uint8).reshape((self.img_h, self.img_w, 4))[:, :, :3]
+        rgb_full = np.array(rgb_raw, dtype=np.uint8).reshape((render_h, render_w, 4))[:, :, :3]
+        depth_buffer = np.array(depth_raw, dtype=np.float32).reshape((render_h, render_w))
+        metric_depth_full = self.far * self.near / (self.far - (self.far - self.near) * depth_buffer)
+        seg_full = np.array(seg_raw, dtype=np.int32).reshape((render_h, render_w))
 
-        # Convert OpenGL non-linear depth buffer [0, 1] into linear depth in meters
-        depth_buffer = np.array(depth_raw, dtype=np.float32).reshape((self.img_h, self.img_w))
-        # metric_depth = far * near / (far - (far - near) * depth_buffer)
-        metric_depth = self.far * self.near / (self.far - (self.far - self.near) * depth_buffer)
-
-        # Segmentation mask [H, W] int32
-        seg = np.array(seg_raw, dtype=np.int32).reshape((self.img_h, self.img_w))
+        if render_w != self.img_w:
+            rgb = cv2.resize(rgb_full, (self.img_w, self.img_h), interpolation=cv2.INTER_AREA)
+            metric_depth = cv2.resize(metric_depth_full, (self.img_w, self.img_h), interpolation=cv2.INTER_AREA)
+            seg = cv2.resize(seg_full, (self.img_w, self.img_h), interpolation=cv2.INTER_NEAREST)
+        else:
+            rgb, metric_depth, seg = rgb_full, metric_depth_full, seg_full
 
         return rgb, metric_depth, seg
+
+    def capture_hd(self, scale=2):
+        """
+        Renders ultra-sharp high-definition observation for presentation & publication artifacts.
+        Returns:
+            rgb_hd, depth_hd, seg_hd at (img_w * scale, img_h * scale)
+        """
+        render_w = int(self.img_w * scale)
+        render_h = int(self.img_h * scale)
+        _, _, rgb_raw, depth_raw, seg_raw = p.getCameraImage(
+            width=render_w,
+            height=render_h,
+            viewMatrix=self.view_matrix,
+            projectionMatrix=self.proj_matrix,
+            renderer=p.ER_BULLET_HARDWARE_OPENGL
+        )
+        rgb_hd = np.array(rgb_raw, dtype=np.uint8).reshape((render_h, render_w, 4))[:, :, :3]
+        depth_buffer = np.array(depth_raw, dtype=np.float32).reshape((render_h, render_w))
+        metric_depth_hd = self.far * self.near / (self.far - (self.far - self.near) * depth_buffer)
+        seg_hd = np.array(seg_raw, dtype=np.int32).reshape((render_h, render_w))
+        return rgb_hd, metric_depth_hd, seg_hd
 
     def deproject_pixel_to_world(self, u, v, depth_val):
         """

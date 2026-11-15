@@ -6,6 +6,7 @@ from scipy.ndimage import gaussian_filter
 from skimage.feature import peak_local_max
 
 from .grasp_geometry import Grasp
+from .validator import GraspValidator
 from models.ggcnn import load_trained_model
 
 class GraspDetector:
@@ -37,7 +38,8 @@ class GraspDetector:
             input_channels=input_channels,
             device=self.device
         )
-        print(f"GraspDetector initialized on: {self.device} (GPU: {torch.cuda.is_available()})")
+        self.validator = GraspValidator(table_depth=self.table_depth)
+        print(f"GraspDetector initialized on: {self.device} (GPU: {torch.cuda.is_available()}) [Validator: Active]")
 
     def preprocess(self, rgb, depth):
         """
@@ -63,12 +65,12 @@ class GraspDetector:
 
         return tensor.to(self.device)
 
-    def detect(self, rgb, depth, camera=None, top_k=5):
+    def detect(self, rgb, depth, camera=None, top_k=5, validate=True, robot=None):
         """
-        Runs CNN inference and extracts top-k ranked grasp candidates.
+        Runs CNN inference, extracts top-k candidates, and runs cyber-physical validation.
         Returns:
-            grasps: list of Grasp objects (ranked by quality score)
-            telemetry: dict containing inference_time_ms, fps, etc.
+            grasps: list of Grasp objects (ranked by validated score if validate=True)
+            telemetry: dict containing inference_time_ms, validation metrics, etc.
             heatmaps: dict containing smoothed 'q_map', 'ang_map', 'width_map'
         """
         inp_tensor = self.preprocess(rgb, depth)
@@ -144,11 +146,21 @@ class GraspDetector:
         # Sort descending by quality score
         grasps.sort(key=lambda g: g.quality, reverse=True)
 
+        # Run secondary Cyber-Physical Grasp Validator
+        val_telemetry = None
+        if validate and len(grasps) > 0:
+            grasps, val_results = self.validator.validate_and_rank(grasps, depth, robot=robot)
+            if len(val_results) > 0:
+                val_telemetry = val_results[0].to_dict()
+
         telemetry = {
             'inference_time_ms': latency_ms,
             'fps': fps,
             'device': str(self.device),
             'top_score': grasps[0].quality if len(grasps) > 0 else 0.0,
+            'validated_score': grasps[0].validated_score if (len(grasps) > 0 and hasattr(grasps[0], 'validated_score')) else (grasps[0].quality if len(grasps) > 0 else 0.0),
+            'verdict': grasps[0].verdict if (len(grasps) > 0 and hasattr(grasps[0], 'verdict')) else "UNCHECKED",
+            'validation': val_telemetry,
             'num_detected': len(grasps)
         }
 

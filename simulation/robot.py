@@ -47,6 +47,26 @@ class FrankaPandaRobot:
                 contactStiffness=50000.0
             )
 
+        # High-definition visual material styling for Franka Panda arm & gripper
+        link_colors = {
+            -1: [0.92, 0.92, 0.94, 1.0],  # base (matte industrial porcelain)
+            0: [0.92, 0.92, 0.94, 1.0],   # link1
+            1: [0.92, 0.92, 0.94, 1.0],   # link2
+            2: [0.92, 0.92, 0.94, 1.0],   # link3
+            3: [0.92, 0.92, 0.94, 1.0],   # link4
+            4: [0.92, 0.92, 0.94, 1.0],   # link5
+            5: [0.92, 0.92, 0.94, 1.0],   # link6
+            6: [0.22, 0.24, 0.26, 1.0],   # link7 (wrist joint: dark graphite)
+            8: [0.16, 0.17, 0.19, 1.0],   # panda_hand (gripper body: matte dark titanium)
+            9: [0.12, 0.12, 0.14, 1.0],   # left finger (matte black rubberized pad)
+            10: [0.12, 0.12, 0.14, 1.0],  # right finger (matte black rubberized pad)
+        }
+        for link_idx, color in link_colors.items():
+            try:
+                p.changeVisualShape(self.robot_id, link_idx, rgbaColor=color, specularColor=[0.7, 0.7, 0.8])
+            except Exception:
+                pass
+
         # Home rest posture (arm safely tucked to the side to keep camera view unobstructed)
         self.home_posture = [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
         # Downward seed pose pointing toward table workspace
