@@ -15,6 +15,7 @@ Provides ultra-clear, publication-ready 4-panel visual telemetry:
 import os
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 
 class Visualizer:
@@ -42,6 +43,23 @@ class Visualizer:
 
         # Interactive Button & Stepper Hitboxes for Mouse Clicks
         self.button_hitboxes = {}
+
+        # TrueType Font Rendering System (Anti-aliased, bold, Unicode-safe)
+        self._font_cache = {}
+        self.font_bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        self.font_reg_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        if not os.path.exists(self.font_bold_path):
+            self.font_bold_path = self.font_reg_path
+
+    def _get_font(self, size=13, bold=True):
+        key = (size, bold)
+        if key not in self._font_cache:
+            p = self.font_bold_path if bold else self.font_reg_path
+            if p and os.path.exists(p):
+                self._font_cache[key] = ImageFont.truetype(p, size)
+            else:
+                self._font_cache[key] = ImageFont.load_default()
+        return self._font_cache[key]
 
     def get_action_at(self, x, y):
         """Returns the identifier of the UI button or stepper clicked at (x, y), or None."""
@@ -377,39 +395,37 @@ class Visualizer:
         cv2.rectangle(canvas, (0, 0), (W, top_h), (32, 26, 22), -1)
         cv2.line(canvas, (0, top_h), (W, top_h), self.PAL_BORDER, 1)
 
-        cv2.putText(canvas, "✦ CPS FRANKA ROBOTIC COMMAND CONSOLE ✦", (20, 26),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.60, self.PAL_CYAN, 2, cv2.LINE_AA)
-        cv2.putText(canvas, "GG-CNN Antipodal Grasp Engine | Closed-Loop Contact Dynamics | 7-DOF Franka Panda",
-                    (20, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.38, self.PAL_MUTED, 1, cv2.LINE_AA)
-
-        # Right side badges
+        # Right side badges with dynamic spacing
         succ, att = success_stats
         rate_str = f"{100.0 * succ / max(1, att):.0f}%" if att > 0 else "N/A"
         badge_stat = f"SUCCESS: {succ}/{att} ({rate_str})"
-        (bw_stat, _), _ = cv2.getTextSize(badge_stat, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
-        bx_stat = W - bw_stat - 24
-        cv2.rectangle(canvas, (bx_stat - 8, 14), (bx_stat + bw_stat + 8, 46), (38, 32, 27), -1)
-        cv2.rectangle(canvas, (bx_stat - 8, 14), (bx_stat + bw_stat + 8, 46), self.PAL_BORDER, 1, cv2.LINE_AA)
-        cv2.putText(canvas, badge_stat, (bx_stat, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.PAL_WHITE, 1, cv2.LINE_AA)
-
-        # Clutter badge
         badge_clutter = f"CLUTTER: {clutter_count} OBJS"
-        (bw_c, _), _ = cv2.getTextSize(badge_clutter, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
-        bx_c = bx_stat - bw_c - 30
-        cv2.rectangle(canvas, (bx_c - 8, 14), (bx_c + bw_c + 8, 46), (38, 32, 27), -1)
-        cv2.rectangle(canvas, (bx_c - 8, 14), (bx_c + bw_c + 8, 46), self.PAL_BORDER, 1, cv2.LINE_AA)
-        cv2.putText(canvas, badge_clutter, (bx_c, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.PAL_AMBER, 1, cv2.LINE_AA)
-
-        # Status badge
         badge_status = f"STATUS: [{status_msg.upper()}]"
-        (bw_s, _), _ = cv2.getTextSize(badge_status, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
-        bx_s = bx_c - bw_s - 30
+
+        f_bdg = self._get_font(12, bold=True)
+        def get_w(txt):
+            bb = f_bdg.getbbox(txt)
+            return (bb[2] - bb[0]) + 20
+
+        bw_stat = max(160, get_w(badge_stat))
+        bw_c = max(140, get_w(badge_clutter))
+        bw_s = max(220, get_w(badge_status))
+
+        bx_stat = W - bw_stat - 20
+        bx_c = bx_stat - bw_c - 14
+        bx_s = bx_c - bw_s - 14
+
+        cv2.rectangle(canvas, (bx_stat, 14), (bx_stat + bw_stat, 46), (38, 32, 27), -1)
+        cv2.rectangle(canvas, (bx_stat, 14), (bx_stat + bw_stat, 46), self.PAL_BORDER, 1, cv2.LINE_AA)
+
+        cv2.rectangle(canvas, (bx_c, 14), (bx_c + bw_c, 46), (38, 32, 27), -1)
+        cv2.rectangle(canvas, (bx_c, 14), (bx_c + bw_c, 46), self.PAL_BORDER, 1, cv2.LINE_AA)
+
         s_col = self.PAL_GREEN if any(w in status_msg.upper() for w in ["FORCE", "ACHIEVED", "SUCCESS", "CLEARED"]) else (
             self.PAL_AMBER if any(w in status_msg.upper() for w in ["DETECT", "SCAN", "BATCH"]) else self.PAL_CYAN
         )
-        cv2.rectangle(canvas, (bx_s - 8, 14), (bx_s + bw_s + 8, 46), (36, 42, 32), -1)
-        cv2.rectangle(canvas, (bx_s - 8, 14), (bx_s + bw_s + 8, 46), s_col, 1, cv2.LINE_AA)
-        cv2.putText(canvas, badge_status, (bx_s, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.44, s_col, 1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (bx_s, 14), (bx_s + bw_s, 46), (36, 42, 32), -1)
+        cv2.rectangle(canvas, (bx_s, 14), (bx_s + bw_s, 46), s_col, 1, cv2.LINE_AA)
 
         # -------------------------------------------------------------
         # 2. MAIN AREA: 3 COLUMNS (y = 68 to 650)
@@ -421,8 +437,6 @@ class Visualizer:
         cv2.rectangle(canvas, (c1_x1, col_y1), (c1_x2, col_y2), self.PAL_PANEL, -1)
         cv2.rectangle(canvas, (c1_x1, col_y1), (c1_x2, col_y2), self.PAL_BORDER, 1, cv2.LINE_AA)
         cv2.rectangle(canvas, (c1_x1, col_y1), (c1_x2, col_y1 + 28), self.PAL_PANEL_HEADER, -1)
-        cv2.putText(canvas, "1. OVERHEAD RGB & ANTIPODAL TARGETS", (c1_x1 + 12, col_y1 + 19),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.PAL_CYAN, 1, cv2.LINE_AA)
 
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR) if rgb.ndim == 3 and rgb.shape[2] == 3 else rgb
         rgb_overlay = self.draw_grasp_overlay(bgr, grasps, top_k=5, size=(430, 430))
@@ -431,33 +445,12 @@ class Visualizer:
         # Col 1 Bottom Info Card
         cv2.rectangle(canvas, (c1_x1 + 12, col_y1 + 474), (c1_x2 - 12, col_y2 - 10), (28, 23, 20), -1)
         cv2.rectangle(canvas, (c1_x1 + 12, col_y1 + 474), (c1_x2 - 12, col_y2 - 10), self.PAL_BORDER, 1, cv2.LINE_AA)
-        if len(grasps) > 0:
-            top_g = grasps[0]
-            val_s = getattr(top_g, "validated_score", top_g.quality)
-            cv2.putText(canvas, f"Top Grasp #1: Q = {top_g.quality:.3f} | Score = {val_s:.3f} | {top_g.angle_deg:+.1f} deg",
-                        (c1_x1 + 20, col_y1 + 496), cv2.FONT_HERSHEY_SIMPLEX, 0.38, self.PAL_GREEN, 1, cv2.LINE_AA)
-            if top_g.world_coords is not None:
-                wx, wy, wz = top_g.world_coords
-                cv2.putText(canvas, f"Target 3D: [{wx:.3f}, {wy:.3f}, {wz:.3f}] m",
-                            (c1_x1 + 20, col_y1 + 518), cv2.FONT_HERSHEY_SIMPLEX, 0.36, self.PAL_WHITE, 1, cv2.LINE_AA)
-            else:
-                cv2.putText(canvas, f"Image Pos: u={top_g.u:.0f}px, v={top_g.v:.0f}px, width={top_g.width_px*0.5:.1f}mm",
-                            (c1_x1 + 20, col_y1 + 518), cv2.FONT_HERSHEY_SIMPLEX, 0.36, self.PAL_WHITE, 1, cv2.LINE_AA)
-            cv2.putText(canvas, "Antipodal verification: friction cone + parallel span check",
-                        (c1_x1 + 20, col_y1 + 538), cv2.FONT_HERSHEY_SIMPLEX, 0.33, self.PAL_MUTED, 1, cv2.LINE_AA)
-        else:
-            cv2.putText(canvas, "[AWAITING DETECTION] No active grasp candidate",
-                        (c1_x1 + 20, col_y1 + 498), cv2.FONT_HERSHEY_SIMPLEX, 0.38, self.PAL_AMBER, 1, cv2.LINE_AA)
-            cv2.putText(canvas, "Click [DETECT] or press 'D' to run GG-CNN inference",
-                        (c1_x1 + 20, col_y1 + 524), cv2.FONT_HERSHEY_SIMPLEX, 0.34, self.PAL_MUTED, 1, cv2.LINE_AA)
 
         # COLUMN 2: GG-CNN Heatmap (x: 480 to 934, W = 454)
         c2_x1, c2_x2 = 480, 934
         cv2.rectangle(canvas, (c2_x1, col_y1), (c2_x2, col_y2), self.PAL_PANEL, -1)
         cv2.rectangle(canvas, (c2_x1, col_y1), (c2_x2, col_y2), self.PAL_BORDER, 1, cv2.LINE_AA)
         cv2.rectangle(canvas, (c2_x1, col_y1), (c2_x2, col_y1 + 28), self.PAL_PANEL_HEADER, -1)
-        cv2.putText(canvas, "2. GG-CNN PREDICTION & CONFIDENCE FIELD", (c2_x1 + 12, col_y1 + 19),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.PAL_CYAN, 1, cv2.LINE_AA)
 
         q_overlay = self.render_hybrid_heatmap(bgr, depth, heatmaps, grasps, size=(430, 430))
         canvas[col_y1 + 36:col_y1 + 36 + 430, c2_x1 + 12:c2_x1 + 12 + 430] = q_overlay
@@ -468,22 +461,15 @@ class Visualizer:
         lat = telemetry.get('inference_time_ms', 24.0)
         fps = telemetry.get('fps', 41.0)
         dev = telemetry.get('device', 'CUDA')
-        cv2.putText(canvas, f"Inference Latency: {lat:.1f} ms (~{fps:.0f} FPS) | Hardware: {dev}",
-                    (c2_x1 + 20, col_y1 + 496), cv2.FONT_HERSHEY_SIMPLEX, 0.38, self.PAL_CYAN, 1, cv2.LINE_AA)
-        cv2.putText(canvas, "Architecture: Generative Grasping CNN (GG-CNN Encoder-Decoder)",
-                    (c2_x1 + 20, col_y1 + 518), cv2.FONT_HERSHEY_SIMPLEX, 0.34, self.PAL_WHITE, 1, cv2.LINE_AA)
-        cv2.putText(canvas, "Output Channels: Quality Q(u,v), Angle theta(u,v), Width W(u,v)",
-                    (c2_x1 + 20, col_y1 + 538), cv2.FONT_HERSHEY_SIMPLEX, 0.33, self.PAL_MUTED, 1, cv2.LINE_AA)
 
         # COLUMN 3: Cyber-Physical Contact Dynamics & Actuators (x: 946 to 1426, W = 480)
         c3_x1, c3_x2 = 946, 1426
         cv2.rectangle(canvas, (c3_x1, col_y1), (c3_x2, col_y2), self.PAL_PANEL, -1)
         cv2.rectangle(canvas, (c3_x1, col_y1), (c3_x2, col_y2), self.PAL_BORDER, 1, cv2.LINE_AA)
         cv2.rectangle(canvas, (c3_x1, col_y1), (c3_x2, col_y1 + 28), self.PAL_PANEL_HEADER, -1)
-        cv2.putText(canvas, "3. CONTACT DYNAMICS & ACTUATOR TELEMETRY", (c3_x1 + 12, col_y1 + 19),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.PAL_CYAN, 1, cv2.LINE_AA)
 
-        if force_snapshot and (force_snapshot.get("normal_force", 0) > 0 or force_snapshot.get("mean_fn", 0) > 0 or force_snapshot.get("joint_torques")):
+        has_force = bool(force_snapshot and (force_snapshot.get("normal_force", 0) > 0 or force_snapshot.get("mean_fn", 0) > 0 or force_snapshot.get("joint_torques")))
+        if has_force:
             fn_val = float(force_snapshot.get("normal_force", force_snapshot.get("mean_fn", 0.0)))
             ft_val = float(force_snapshot.get("friction_force", force_snapshot.get("mean_ft", 0.0)))
             fn_l = float(force_snapshot.get("left_fn", fn_val))
@@ -492,33 +478,22 @@ class Visualizer:
             margin_pct = float(force_snapshot.get("friction_margin_pct", force_snapshot.get("margin_pct", 0.0)))
             fc_status = bool(force_snapshot.get("force_closure", False))
 
-            # Section A: Contact Mechanics
-            cv2.putText(canvas, "Contact Diagnostics (Coulomb Friction Formulation):",
-                        (c3_x1 + 14, col_y1 + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.38, self.PAL_WHITE, 1, cv2.LINE_AA)
-
             # Normal Force Meter Bar
             fn_max = 180.0
             bar_w = 340
-            cv2.putText(canvas, f"F_normal: {fn_val:.1f} N (Left: {fn_l:.1f} N | Right: {fn_r:.1f} N)",
-                        (c3_x1 + 14, col_y1 + 72), cv2.FONT_HERSHEY_SIMPLEX, 0.36, self.PAL_GREEN, 1, cv2.LINE_AA)
             cv2.rectangle(canvas, (c3_x1 + 14, col_y1 + 78), (c3_x1 + 14 + bar_w, col_y1 + 92), (45, 38, 32), -1)
             fill_w = int(bar_w * min(1.0, fn_val / fn_max))
             cv2.rectangle(canvas, (c3_x1 + 14, col_y1 + 78), (c3_x1 + 14 + fill_w, col_y1 + 92), (0, 220, 140), -1)
             t_x = c3_x1 + 14 + int(bar_w * (120.0 / fn_max))
             cv2.line(canvas, (t_x, col_y1 + 76), (t_x, col_y1 + 94), (0, 255, 255), 2)
 
-            # Friction Angle & Margin
-            cv2.putText(canvas, f"Friction Angle: theta = {th_val:.1f} deg (Cone Limit: 54.5 deg for mu=1.4)",
-                        (c3_x1 + 14, col_y1 + 114), cv2.FONT_HERSHEY_SIMPLEX, 0.35, self.PAL_WHITE, 1, cv2.LINE_AA)
+            # Friction Angle & Margin Card
             cv2.rectangle(canvas, (c3_x1 + 14, col_y1 + 124), (c3_x2 - 14, col_y1 + 152), (32, 45, 28) if fc_status else (45, 30, 30), -1)
             cv2.rectangle(canvas, (c3_x1 + 14, col_y1 + 124), (c3_x2 - 14, col_y1 + 152), self.PAL_GREEN if fc_status else self.PAL_RED, 1, cv2.LINE_AA)
             fc_text = f"VERDICT: [FORCE CLOSURE ACHIEVED] (Safety Margin: {margin_pct:.1f}%)" if fc_status else "VERDICT: [SLIP WARNING: EXCESSIVE SHEAR]"
-            cv2.putText(canvas, fc_text, (c3_x1 + 22, col_y1 + 143), cv2.FONT_HERSHEY_SIMPLEX, 0.36, self.PAL_GREEN if fc_status else self.PAL_RED, 1, cv2.LINE_AA)
 
             # Section B: 7-DOF Actuator Torques
             cv2.line(canvas, (c3_x1 + 14, col_y1 + 168), (c3_x2 - 14, col_y1 + 168), self.PAL_BORDER, 1)
-            cv2.putText(canvas, "Franka Panda 7-DOF Actuator Torques (Motor Effort):",
-                        (c3_x1 + 14, col_y1 + 190), cv2.FONT_HERSHEY_SIMPLEX, 0.38, self.PAL_CYAN, 1, cv2.LINE_AA)
 
             j_raw = force_snapshot.get("joint_torques", [-0.02, -33.52, 0.17, 20.12, 0.99, 1.71, 0.02])
             joint_specs = [
@@ -538,9 +513,6 @@ class Visualizer:
             for idx, (j_name, limit, note) in enumerate(joint_specs):
                 tau = float(j_raw[idx]) if idx < len(j_raw) else 0.0
                 jy = t_box_y + idx * 46
-                cv2.putText(canvas, j_name, (c3_x1 + 14, jy + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.35, self.PAL_WHITE, 1, cv2.LINE_AA)
-                if note:
-                    cv2.putText(canvas, f"({note})", (c3_x1 + 14, jy + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.30, self.PAL_MUTED, 1, cv2.LINE_AA)
 
                 # Bipolar bar track
                 cv2.rectangle(canvas, (mid_x - half_bar, jy + 4), (mid_x + half_bar, jy + 18), (42, 35, 30), -1)
@@ -554,30 +526,15 @@ class Visualizer:
                 else:
                     cv2.rectangle(canvas, (mid_x - bar_len, jy + 4), (mid_x, jy + 18), bar_col, -1)
 
-                cv2.putText(canvas, f"{tau:+.2f} Nm", (mid_x + half_bar + 10, jy + 14),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, self.PAL_WHITE, 1, cv2.LINE_AA)
-
             # Peak summary card
             pj = force_snapshot.get("peak_joint", "J2")
             pt = float(force_snapshot.get("peak_torque", -33.52))
             cv2.rectangle(canvas, (c3_x1 + 14, col_y2 - 40), (c3_x2 - 14, col_y2 - 10), (32, 28, 24), -1)
             cv2.rectangle(canvas, (c3_x1 + 14, col_y2 - 40), (c3_x2 - 14, col_y2 - 10), self.PAL_BORDER, 1, cv2.LINE_AA)
-            cv2.putText(canvas, f"PEAK MOTOR EFFORT: {pj} ({pt:+.2f} N*m)",
-                        (c3_x1 + 22, col_y2 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.35, self.PAL_CYAN, 1, cv2.LINE_AA)
         else:
             # Standby Card when idle before first grasp
             cv2.rectangle(canvas, (c3_x1 + 24, col_y1 + 180), (c3_x2 - 24, col_y1 + 380), (38, 32, 28), -1)
             cv2.rectangle(canvas, (c3_x1 + 24, col_y1 + 180), (c3_x2 - 24, col_y1 + 380), self.PAL_BORDER, 1, cv2.LINE_AA)
-            cv2.putText(canvas, "[ AWAITING PHYSICAL GRASP TELEMETRY ]", (c3_x1 + 46, col_y1 + 230),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.PAL_CYAN, 1, cv2.LINE_AA)
-            cv2.putText(canvas, "Trigger a pick-and-place cycle to stream live telemetry:",
-                        (c3_x1 + 46, col_y1 + 270), cv2.FONT_HERSHEY_SIMPLEX, 0.36, self.PAL_WHITE, 1, cv2.LINE_AA)
-            cv2.putText(canvas, "  * Coulomb friction cone margin & normal forces",
-                        (c3_x1 + 50, col_y1 + 300), cv2.FONT_HERSHEY_SIMPLEX, 0.34, self.PAL_MUTED, 1, cv2.LINE_AA)
-            cv2.putText(canvas, "  * 7-DOF Franka Panda actuator dynamic torques",
-                        (c3_x1 + 50, col_y1 + 325), cv2.FONT_HERSHEY_SIMPLEX, 0.34, self.PAL_MUTED, 1, cv2.LINE_AA)
-            cv2.putText(canvas, "Click [EXECUTE NEXT] or press Spacebar to begin.",
-                        (c3_x1 + 46, col_y1 + 355), cv2.FONT_HERSHEY_SIMPLEX, 0.36, self.PAL_GREEN, 1, cv2.LINE_AA)
 
         # -------------------------------------------------------------
         # 3. BOTTOM COMMAND & INTERACTIVE BAR (y = 660 to 820)
@@ -586,63 +543,171 @@ class Visualizer:
         cv2.rectangle(canvas, (0, bot_y), (W, H), (22, 18, 15), -1)
         cv2.line(canvas, (0, bot_y), (W, bot_y), self.PAL_BORDER, 1)
 
-        # Row 1: Action Buttons (y: 672 to 714)
-        btn_y1, btn_y2 = 672, 714
+        # Row 1: Action Buttons (y: 670 to 716, h=46)
+        btn_y1, btn_y2 = 670, 716
         buttons = [
-            ("detect", "DETECT [D]", 14, 180, self.PAL_CYAN),
-            ("execute", "EXECUTE NEXT [E]", 195, 420, self.PAL_GREEN),
-            ("pick_all", "PICK ALL [A]", 435, 600, self.PAL_CYAN),
-            ("batch_pick", "BATCH PICK [B]", 615, 780, (255, 200, 50)),
-            ("respawn", "RESPAWN [R]", 795, 960, self.PAL_AMBER),
-            ("home", "HOME [H]", 975, 1140, (180, 190, 200)),
-            ("camera", "CAMERA [C/1-4]", 1155, 1320, (230, 130, 255)),
-            ("quit", "QUIT [Q]", 1335, 1426, self.PAL_RED)
+            ("detect", "DETECT", "[D]", 14, 180, self.PAL_CYAN),
+            ("execute", "EXECUTE NEXT", "[E/Space]", 195, 420, self.PAL_GREEN),
+            ("pick_all", "PICK ALL", "[A]", 435, 600, self.PAL_CYAN),
+            ("batch_pick", "BATCH PICK", "[B]", 615, 780, (255, 200, 50)),
+            ("respawn", "RESPAWN", "[R]", 795, 960, self.PAL_AMBER),
+            ("home", "HOME", "[H]", 975, 1140, (200, 210, 220)),
+            ("camera", "CAMERA", "[C/1-4]", 1155, 1320, (230, 130, 255)),
+            ("quit", "QUIT", "[Q]", 1335, 1426, self.PAL_RED)
         ]
-        for act_id, label, bx1, bx2, col in buttons:
+
+        for act_id, label, key, bx1, bx2, col in buttons:
             self.button_hitboxes[act_id] = (bx1, btn_y1, bx2, btn_y2)
-            cv2.rectangle(canvas, (bx1, btn_y1), (bx2, btn_y2), (36, 30, 26), -1)
-            cv2.rectangle(canvas, (bx1, btn_y1), (bx2, btn_y2), col, 1, cv2.LINE_AA)
-            (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
-            tx = bx1 + (bx2 - bx1 - tw) // 2
-            cv2.putText(canvas, label, (tx, btn_y1 + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.38, col, 1, cv2.LINE_AA)
+            # Elevated tactile button surface
+            cv2.rectangle(canvas, (bx1, btn_y1), (bx2, btn_y2), (46, 38, 32), -1)
+            # 2px anti-aliased border
+            cv2.rectangle(canvas, (bx1, btn_y1), (bx2, btn_y2), col, 2, cv2.LINE_AA)
+            # Tactile bevel line
+            cv2.line(canvas, (bx1 + 2, btn_y1 + 2), (bx2 - 2, btn_y1 + 2), (75, 65, 55), 1)
 
         # Row 2: Discrete Steppers & Jogging Guide (y: 724 to 764)
         # Spawn Stepper
-        cv2.rectangle(canvas, (14, 724), (200, 764), (34, 28, 24), -1)
+        cv2.rectangle(canvas, (14, 724), (200, 764), (38, 32, 28), -1)
         cv2.rectangle(canvas, (14, 724), (200, 764), self.PAL_BORDER, 1, cv2.LINE_AA)
         # [-]
         self.button_hitboxes["spawn_minus"] = (14, 724, 54, 764)
-        cv2.rectangle(canvas, (14, 724), (54, 764), (45, 36, 30), -1)
-        cv2.putText(canvas, "[-]", (24, 748), cv2.FONT_HERSHEY_SIMPLEX, 0.44, self.PAL_CYAN, 1, cv2.LINE_AA)
-        # Text
-        cv2.putText(canvas, f"SPAWN: {spawn_count}", (68, 748), cv2.FONT_HERSHEY_SIMPLEX, 0.40, self.PAL_WHITE, 1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (14, 724), (54, 764), (56, 46, 40), -1)
+        cv2.rectangle(canvas, (14, 724), (54, 764), self.PAL_CYAN, 1, cv2.LINE_AA)
         # [+]
         self.button_hitboxes["spawn_plus"] = (160, 724, 200, 764)
-        cv2.rectangle(canvas, (160, 724), (200, 764), (45, 36, 30), -1)
-        cv2.putText(canvas, "[+]", (168, 748), cv2.FONT_HERSHEY_SIMPLEX, 0.44, self.PAL_CYAN, 1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (160, 724), (200, 764), (56, 46, 40), -1)
+        cv2.rectangle(canvas, (160, 724), (200, 764), self.PAL_CYAN, 1, cv2.LINE_AA)
 
         # Batch Stepper
-        cv2.rectangle(canvas, (215, 724), (400, 764), (34, 28, 24), -1)
+        cv2.rectangle(canvas, (215, 724), (400, 764), (38, 32, 28), -1)
         cv2.rectangle(canvas, (215, 724), (400, 764), self.PAL_BORDER, 1, cv2.LINE_AA)
         # [-]
         self.button_hitboxes["batch_minus"] = (215, 724, 255, 764)
-        cv2.rectangle(canvas, (215, 724), (255, 764), (45, 36, 30), -1)
-        cv2.putText(canvas, "[-]", (225, 748), cv2.FONT_HERSHEY_SIMPLEX, 0.44, self.PAL_CYAN, 1, cv2.LINE_AA)
-        # Text
-        cv2.putText(canvas, f"BATCH: {batch_count}", (270, 748), cv2.FONT_HERSHEY_SIMPLEX, 0.40, self.PAL_WHITE, 1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (215, 724), (255, 764), (56, 46, 40), -1)
+        cv2.rectangle(canvas, (215, 724), (255, 764), self.PAL_CYAN, 1, cv2.LINE_AA)
         # [+]
         self.button_hitboxes["batch_plus"] = (360, 724, 400, 764)
-        cv2.rectangle(canvas, (360, 724), (400, 764), (45, 36, 30), -1)
-        cv2.putText(canvas, "[+]", (368, 748), cv2.FONT_HERSHEY_SIMPLEX, 0.44, self.PAL_CYAN, 1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (360, 724), (400, 764), (56, 46, 40), -1)
+        cv2.rectangle(canvas, (360, 724), (400, 764), self.PAL_CYAN, 1, cv2.LINE_AA)
 
-        # Teleoperation Jog Guide
-        cv2.rectangle(canvas, (415, 724), (1426, 764), (28, 24, 20), -1)
+        # Teleoperation Jog Guide Box
+        cv2.rectangle(canvas, (415, 724), (1426, 764), (32, 26, 22), -1)
         cv2.rectangle(canvas, (415, 724), (1426, 764), self.PAL_BORDER, 1, cv2.LINE_AA)
-        jog_str = "TELEOPERATION: [Arrows] Nudge Arm X/Y | [PageUp/Down or U/J] Arm Z | [,/.] Wrist Yaw | [O/P] Open/Close Gripper"
-        cv2.putText(canvas, jog_str, (430, 748), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (210, 220, 230), 1, cv2.LINE_AA)
 
-        # Row 3: Hotkey Legend Strip (y: 776 to 810)
-        legend_str = "HOTKEYS: [D] Detect  [E/Space] Next Pick  [A] Pick All  [B] Batch  [R] Respawn  [H] Home  [1-4/C] Cameras  [Arrows/U/J] Jog  [O/P] Gripper  [Q] Quit"
-        cv2.putText(canvas, legend_str, (20, 796), cv2.FONT_HERSHEY_SIMPLEX, 0.35, self.PAL_MUTED, 1, cv2.LINE_AA)
+        # -------------------------------------------------------------
+        # 4. CRISP TRUETYPE TYPOGRAPHY LAYER (PIL ImageDraw)
+        # -------------------------------------------------------------
+        pil_img = Image.fromarray(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img)
 
+        # TrueType Fonts
+        f_title = self._get_font(17, bold=True)
+        f_sub = self._get_font(11, bold=False)
+        f_badge = self._get_font(12, bold=True)
+        f_col_hdr = self._get_font(12, bold=True)
+        f_btn_lbl = self._get_font(13, bold=True)
+        f_btn_key = self._get_font(11, bold=True)
+        f_card_bold = self._get_font(11, bold=True)
+        f_card_reg = self._get_font(11, bold=False)
+        f_stepper_sym = self._get_font(15, bold=True)
+        f_stepper_val = self._get_font(13, bold=True)
+        f_small = self._get_font(10, bold=False)
+
+        # 1. Header Text (Zero question marks!)
+        draw.text((22, 14), "CPS FRANKA ROBOTIC COMMAND CONSOLE", font=f_title, fill=(22, 224, 234))
+        draw.text((22, 38), "GG-CNN Antipodal Grasp Engine  |  Closed-Loop Contact Dynamics  |  7-DOF Franka Panda", font=f_sub, fill=(170, 180, 190))
+
+        # Badges
+        draw.text((bx_stat + 10, 23), badge_stat, font=f_badge, fill=(245, 245, 250))
+        draw.text((bx_c + 10, 23), badge_clutter, font=f_badge, fill=(255, 184, 48))
+        s_rgb = (0, 255, 150) if any(w in status_msg.upper() for w in ["FORCE", "ACHIEVED", "SUCCESS", "CLEARED"]) else (
+            (255, 184, 48) if any(w in status_msg.upper() for w in ["DETECT", "SCAN", "BATCH"]) else (22, 224, 234)
+        )
+        draw.text((bx_s + 10, 23), badge_status, font=f_badge, fill=s_rgb)
+
+        # 2. Column Headers
+        draw.text((c1_x1 + 14, col_y1 + 6), "1. OVERHEAD RGB & ANTIPODAL TARGETS", font=f_col_hdr, fill=(22, 224, 234))
+        draw.text((c2_x1 + 14, col_y1 + 6), "2. GG-CNN PREDICTION & CONFIDENCE FIELD", font=f_col_hdr, fill=(22, 224, 234))
+        draw.text((c3_x1 + 14, col_y1 + 6), "3. CONTACT DYNAMICS & ACTUATOR TELEMETRY", font=f_col_hdr, fill=(22, 224, 234))
+
+        # 3. Col 1 Info Card
+        if len(grasps) > 0:
+            top_g = grasps[0]
+            val_s = getattr(top_g, "validated_score", top_g.quality)
+            draw.text((c1_x1 + 20, col_y1 + 486), f"Top Grasp #1: Q = {top_g.quality:.3f} | Score = {val_s:.3f} | {top_g.angle_deg:+.1f}°", font=f_card_bold, fill=(0, 255, 140))
+            if top_g.world_coords is not None:
+                wx, wy, wz = top_g.world_coords
+                draw.text((c1_x1 + 20, col_y1 + 508), f"Target 3D: [{wx:.3f}, {wy:.3f}, {wz:.3f}] m", font=f_card_reg, fill=(240, 240, 245))
+            else:
+                draw.text((c1_x1 + 20, col_y1 + 508), f"Image Pos: u={top_g.u:.0f}px, v={top_g.v:.0f}px, width={top_g.width_px*0.5:.1f}mm", font=f_card_reg, fill=(240, 240, 245))
+            draw.text((c1_x1 + 20, col_y1 + 528), "Antipodal verification: friction cone + parallel span check", font=f_card_reg, fill=(160, 150, 140))
+        else:
+            draw.text((c1_x1 + 20, col_y1 + 492), "[AWAITING DETECTION] No active grasp candidate", font=f_card_bold, fill=(255, 184, 48))
+            draw.text((c1_x1 + 20, col_y1 + 518), "Click [DETECT] or press 'D' to run GG-CNN inference", font=f_card_reg, fill=(170, 160, 150))
+
+        # 4. Col 2 Info Card
+        draw.text((c2_x1 + 20, col_y1 + 486), f"Inference Latency: {lat:.1f} ms (~{fps:.0f} FPS) | Hardware: {dev}", font=f_card_bold, fill=(22, 224, 234))
+        draw.text((c2_x1 + 20, col_y1 + 508), "Architecture: Generative Grasping CNN (GG-CNN Encoder-Decoder)", font=f_card_reg, fill=(240, 240, 245))
+        draw.text((c2_x1 + 20, col_y1 + 528), "Output Channels: Quality Q(u,v), Angle θ(u,v), Width W(u,v)", font=f_card_reg, fill=(160, 150, 140))
+
+        # 5. Col 3 Contact Dynamics
+        has_force = bool(force_snapshot and (force_snapshot.get("normal_force", 0) > 0 or force_snapshot.get("mean_fn", 0) > 0 or force_snapshot.get("joint_torques")))
+        if has_force:
+            draw.text((c3_x1 + 14, col_y1 + 46), "Contact Diagnostics (Coulomb Friction Formulation):", font=f_card_bold, fill=(255, 255, 255))
+            draw.text((c3_x1 + 14, col_y1 + 66), f"F_normal: {fn_val:.1f} N  (Left: {fn_l:.1f} N | Right: {fn_r:.1f} N)", font=f_card_bold, fill=(0, 255, 140))
+            draw.text((c3_x1 + 14, col_y1 + 104), f"Friction Angle: θ = {th_val:.1f}° (Limit: 54.5° for μ=1.4)", font=f_card_reg, fill=(240, 240, 245))
+            fc_col = (0, 255, 140) if fc_status else (255, 70, 70)
+            draw.text((c3_x1 + 22, col_y1 + 130), fc_text, font=f_card_bold, fill=fc_col)
+
+            draw.text((c3_x1 + 14, col_y1 + 176), "Franka Panda 7-DOF Actuator Torques (Motor Effort):", font=f_card_bold, fill=(22, 224, 234))
+            for idx, (j_name, limit, note) in enumerate(joint_specs):
+                tau = float(j_raw[idx]) if idx < len(j_raw) else 0.0
+                jy = t_box_y + idx * 46
+                draw.text((c3_x1 + 14, jy + 2), j_name, font=f_card_bold, fill=(255, 255, 255))
+                if note:
+                    draw.text((c3_x1 + 14, jy + 18), f"({note})", font=f_small, fill=(160, 150, 140))
+                draw.text((mid_x + half_bar + 10, jy + 2), f"{tau:+.2f} Nm", font=f_card_bold, fill=(240, 240, 245))
+
+            draw.text((c3_x1 + 22, col_y2 - 32), f"PEAK MOTOR EFFORT: {pj} ({pt:+.2f} N·m)", font=f_card_bold, fill=(22, 224, 234))
+        else:
+            draw.text((c3_x1 + 46, col_y1 + 215), "[ AWAITING PHYSICAL GRASP TELEMETRY ]", font=f_card_bold, fill=(22, 224, 234))
+            draw.text((c3_x1 + 46, col_y1 + 245), "Trigger a pick-and-place cycle to stream live telemetry:", font=f_card_reg, fill=(255, 255, 255))
+            draw.text((c3_x1 + 50, col_y1 + 275), "• Coulomb friction cone margin & normal forces", font=f_card_reg, fill=(180, 170, 160))
+            draw.text((c3_x1 + 50, col_y1 + 300), "• 7-DOF Franka Panda actuator dynamic torques", font=f_card_reg, fill=(180, 170, 160))
+            draw.text((c3_x1 + 46, col_y1 + 335), "Click [EXECUTE NEXT] or press Spacebar to begin.", font=f_card_bold, fill=(0, 255, 140))
+
+        # 6. Bottom Buttons (Bold White Action Label + High-Contrast Hotkey Tag)
+        for act_id, label, key, bx1, bx2, col in buttons:
+            col_rgb = (col[2], col[1], col[0])
+            bb_l = draw.textbbox((0, 0), label, font=f_btn_lbl)
+            lw = bb_l[2] - bb_l[0]
+            bb_k = draw.textbbox((0, 0), key, font=f_btn_key)
+            kw = bb_k[2] - bb_k[0]
+            tot_w = lw + 8 + kw
+            start_x = bx1 + (bx2 - bx1 - tot_w) // 2
+
+            # Pure Bold White Label
+            draw.text((start_x, btn_y1 + 14), label, font=f_btn_lbl, fill=(255, 255, 255))
+            # Vivid Hotkey Tag
+            draw.text((start_x + lw + 8, btn_y1 + 16), key, font=f_btn_key, fill=col_rgb)
+
+        # 7. Steppers
+        draw.text((25, 733), "[-]", font=f_stepper_sym, fill=(22, 224, 234))
+        draw.text((70, 735), f"SPAWN: {spawn_count}", font=f_stepper_val, fill=(255, 255, 255))
+        draw.text((171, 733), "[+]", font=f_stepper_sym, fill=(22, 224, 234))
+
+        draw.text((226, 733), "[-]", font=f_stepper_sym, fill=(22, 224, 234))
+        draw.text((270, 735), f"BATCH: {batch_count}", font=f_stepper_val, fill=(255, 255, 255))
+        draw.text((371, 733), "[+]", font=f_stepper_sym, fill=(22, 224, 234))
+
+        # 8. Teleoperation Guide
+        jog_str = "TELEOPERATION: [Arrows] Nudge Arm X/Y  |  [PageUp/Down or U/J] Arm Z  |  [,/.] Wrist Yaw  |  [O/P] Open/Close Gripper"
+        draw.text((430, 736), jog_str, font=f_sub, fill=(225, 232, 240))
+
+        # 9. Hotkeys Strip
+        legend_str = "HOTKEYS: [D] Detect   [E/Space] Next Pick   [A] Pick All   [B] Batch   [R] Respawn   [H] Home   [1-4/C] Cameras   [G] GUI   [Q] Quit"
+        draw.text((22, 786), legend_str, font=f_sub, fill=(160, 150, 140))
+
+        # Convert back to BGR for OpenCV
+        canvas = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         return canvas

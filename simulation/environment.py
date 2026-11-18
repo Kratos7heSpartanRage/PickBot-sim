@@ -142,25 +142,120 @@ class GraspingEnvironment:
         except Exception:
             self.tray_id = None
 
-        # 5. Crisp Workspace Accent Lines in GUI
+        # 5. Authentic Automated Manufacturing Workcell / Factory Environment Setting
+        self._setup_factory_environment()
+
+        # 6. Crisp Workspace Accent Lines in GUI
         if self.gui:
             self._draw_workspace_bounds()
 
-        # 6. Initialize Robot Arm (Home tucked away outside camera FOV)
+        # 7. Initialize Robot Arm (Home tucked away outside camera FOV)
         self.robot = FrankaPandaRobot(base_pos=(0.0, 0.0, 0.0))
 
-        # 7. Initialize Overhead Camera (z=0.85m directly above center [0.5, 0.0])
+        # 8. Initialize Overhead Camera (z=0.85m directly above center [0.5, 0.0])
         self.camera = OverheadCamera(
             target_pos=(0.5, 0.0, 0.0),
             camera_pos=(0.5, 0.0, 0.85),
             img_size=(300, 300)
         )
 
-        # 8. Initialize Calibrated Object Spawner
+        # 9. Initialize Calibrated Object Spawner
         self.spawner = ObjectSpawner(
             workspace_bounds=((0.37, 0.63), (-0.17, 0.17)),
             table_height=self.table_top_z
         )
+
+    def _setup_factory_environment(self):
+        """
+        Constructs an authentic automated manufacturing workcell / factory environment:
+          1. Architectural Factory Walls (Light industrial RAL 7035 panels with slate baseboards & safety stripe).
+          2. Safety Enclosure (Aluminum extrusion posts + translucent polycarbonate protective shielding).
+          3. Overhead Sensor Gantry (Rigid aluminum arch holding the downward-facing RGB-D camera).
+          4. Industrial Robot Controller Cabinet (KUKA/Franka PLC electrical unit with E-Stop).
+          5. 3-Tier Andon Status Light Tower (Green / Amber / Red indicators).
+          6. Collection Tray Outfeed Ramp (Steel industrial chute leading to facility staging).
+        All fixtures use mass=0 and collision=-1 so they add zero physics overhead and cannot impede robot motions.
+        """
+        fl_z = -0.626  # Ground plane elevation
+
+        # 1. Architectural Factory Walls
+        # Rear wall
+        vis_rear = p.createVisualShape(p.GEOM_BOX, halfExtents=[2.4, 0.04, 1.4], rgbaColor=[0.82, 0.84, 0.86, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_rear, basePosition=[0.45, -1.35, 0.77 + fl_z])
+        # Baseboard plinth (dark kickplate)
+        vis_base = p.createVisualShape(p.GEOM_BOX, halfExtents=[2.4, 0.05, 0.08], rgbaColor=[0.20, 0.22, 0.25, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_base, basePosition=[0.45, -1.34, 0.08 + fl_z])
+        # Industrial Safety Blue accent stripe on wall
+        vis_stripe = p.createVisualShape(p.GEOM_BOX, halfExtents=[2.4, 0.045, 0.045], rgbaColor=[0.12, 0.38, 0.58, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_stripe, basePosition=[0.45, -1.34, 0.65])
+
+        # Left partition wall
+        vis_left = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.04, 1.8, 1.4], rgbaColor=[0.76, 0.78, 0.80, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_left, basePosition=[-0.95, 0.20, 0.77 + fl_z])
+        vis_left_base = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.05, 1.8, 0.08], rgbaColor=[0.20, 0.22, 0.25, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_left_base, basePosition=[-0.94, 0.20, 0.08 + fl_z])
+
+        # 2. Safety Fence Enclosure (Aluminum Framing + Translucent Polycarbonate)
+        post_shape = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.025, 0.025, 0.65], rgbaColor=[0.30, 0.33, 0.36, 1.0])
+        posts = [
+            [1.20, -0.65], [1.20, 0.85],
+            [-0.45, 0.85], [-0.45, -0.65]
+        ]
+        for px_c, py_c in posts:
+            p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=post_shape, basePosition=[px_c, py_c, 0.65 + fl_z])
+
+        # Translucent protective glass shields (Rear and Right side)
+        glass_rear = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.80, 0.01, 0.45], rgbaColor=[0.28, 0.42, 0.56, 0.32])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=glass_rear, basePosition=[0.38, -0.65, 0.65 + fl_z])
+        glass_right = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.01, 0.75, 0.45], rgbaColor=[0.28, 0.42, 0.56, 0.32])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=glass_right, basePosition=[1.20, 0.10, 0.65 + fl_z])
+
+        # Safety kickplates (Yellow hazard baseboards along fence)
+        vis_kick_r = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.80, 0.012, 0.05], rgbaColor=[0.92, 0.78, 0.12, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_kick_r, basePosition=[0.38, -0.65, 0.05 + fl_z])
+        vis_kick_side = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.012, 0.75, 0.05], rgbaColor=[0.92, 0.78, 0.12, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_kick_side, basePosition=[1.20, 0.10, 0.05 + fl_z])
+
+        # 3. Overhead Inspection Camera Gantry (Above picking table)
+        vis_mast = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.02, 0.02, 0.52], rgbaColor=[0.26, 0.28, 0.30, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_mast, basePosition=[0.50, -0.42, 0.52])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_mast, basePosition=[0.50, 0.58, 0.52])
+        # Crossbeam
+        vis_beam = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.022, 0.50, 0.022], rgbaColor=[0.24, 0.26, 0.28, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_beam, basePosition=[0.50, 0.08, 1.04])
+        # Physical Camera Sensor Enclosure (RealSense / Zivid style)
+        vis_cambox = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.045, 0.045, 0.035], rgbaColor=[0.10, 0.12, 0.14, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_cambox, basePosition=[0.50, 0.0, 0.98])
+        vis_camlens = p.createVisualShape(p.GEOM_CYLINDER, radius=0.018, length=0.015, rgbaColor=[0.05, 0.05, 0.08, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_camlens, basePosition=[0.50, 0.0, 0.94])
+
+        # 4. Industrial Control Cabinet (KUKA/Franka PLC electrical enclosure)
+        vis_cab = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.22, 0.26, 0.45], rgbaColor=[0.72, 0.74, 0.76, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_cab, basePosition=[-0.55, -0.85, 0.45 + fl_z])
+        vis_cab_top = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.23, 0.27, 0.02], rgbaColor=[0.18, 0.20, 0.22, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_cab_top, basePosition=[-0.55, -0.85, 0.92 + fl_z])
+        # E-Stop on Cabinet
+        vis_estop_base = p.createVisualShape(p.GEOM_CYLINDER, radius=0.035, length=0.025, rgbaColor=[0.95, 0.80, 0.10, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_estop_base, basePosition=[-0.65, -0.80, 0.95 + fl_z])
+        vis_estop_btn = p.createVisualShape(p.GEOM_CYLINDER, radius=0.024, length=0.020, rgbaColor=[0.92, 0.15, 0.15, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_estop_btn, basePosition=[-0.65, -0.80, 0.97 + fl_z])
+
+        # 5. 3-Tier Andon Light Stack
+        vis_mast_lt = p.createVisualShape(p.GEOM_CYLINDER, radius=0.012, length=0.35, rgbaColor=[0.22, 0.24, 0.26, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_mast_lt, basePosition=[-0.45, -0.95, 1.10 + fl_z])
+        # Green (Running / Online)
+        vis_lt_g = p.createVisualShape(p.GEOM_CYLINDER, radius=0.022, length=0.05, rgbaColor=[0.10, 0.95, 0.25, 0.95])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_lt_g, basePosition=[-0.45, -0.95, 1.30 + fl_z])
+        # Amber (Standby)
+        vis_lt_a = p.createVisualShape(p.GEOM_CYLINDER, radius=0.022, length=0.05, rgbaColor=[0.95, 0.65, 0.10, 0.95])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_lt_a, basePosition=[-0.45, -0.95, 1.36 + fl_z])
+        # Red (Alert)
+        vis_lt_r = p.createVisualShape(p.GEOM_CYLINDER, radius=0.022, length=0.05, rgbaColor=[0.95, 0.20, 0.20, 0.95])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_lt_r, basePosition=[-0.45, -0.95, 1.42 + fl_z])
+
+        # 6. Drop Tray Outfeed Chute / Staging Ramp
+        vis_chute = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.12, 0.18, 0.015], rgbaColor=[0.22, 0.24, 0.28, 1.0])
+        p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_chute, basePosition=[0.45, 0.65, 0.10])
 
     def _draw_workspace_bounds(self):
         """Draws crisp accent border lines around active picking workspace and safety perimeter."""
