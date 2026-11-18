@@ -31,19 +31,24 @@ from perception.visualizer import Visualizer
 class InteractivePlayground:
     """Full interactive simulation playground with PyBullet GUI + OpenCV HUD."""
 
-    def __init__(self, num_objects=3, show_dashboard=True, checkpoint=None):
+    def __init__(self, num_objects=3, show_dashboard=True, checkpoint=None, enable_gui_panels=False):
         self.show_dashboard = show_dashboard
         self.num_objects = max(1, min(8, int(round(num_objects))))
+        self.batch_count = 2
+        self.enable_gui_panels = enable_gui_panels
+        self.gui_visible = enable_gui_panels
+        self.console_window = "CPS Industrial Command Console"
+        self._quit_requested = False
 
-        print("=" * 75)
-        print("  CYBER PHYSICAL SYSTEMS: INTERACTIVE PICK-AND-PLACE PLAYGROUND")
-        print("  Autonomous AI-Based Robotic Manipulation System")
-        print("=" * 75)
+        print("=" * 78)
+        print("  ✦ CYBER PHYSICAL SYSTEMS: INTERACTIVE ROBOTIC PICK-AND-PLACE STUDIO ✦")
+        print("  Autonomous AI-Based Vision-Guided Robotic Manipulation (Franka Panda 7-DOF)")
+        print("=" * 78)
         print()
 
-        # 1. Initialize PyBullet Simulation Environment
-        print("[1/3] Initializing PyBullet Simulation with GUI...")
-        self.env = GraspingEnvironment(gui=True)
+        # 1. Initialize PyBullet Simulation Environment (Clean Studio Mode by default)
+        print("[1/3] Initializing PyBullet Simulation (Clean Studio Viewport)...")
+        self.env = GraspingEnvironment(gui=True, enable_gui_panels=self.enable_gui_panels)
 
         # 2. Initialize Perception Model
         ckpt = checkpoint or "checkpoints/ggcnn_weights_cornell/ggcnn_epoch_23_cornell_statedict.pt"
@@ -55,7 +60,7 @@ class InteractivePlayground:
         self.executor = GraspExecutor(self.env.robot, tray_pos=(0.45, 0.45, 0.22))
 
         # 3. Spawn initial calibrated scene
-        print(f"[3/3] Spawning {self.num_objects} objects in workspace...")
+        print(f"[3/3] Spawning {self.num_objects} calibrated objects in workspace...")
         self.env.reset(num_objects=self.num_objects)
         for _ in range(60):
             self.env.step()
@@ -72,6 +77,11 @@ class InteractivePlayground:
         self.successful_grasps = 0
         self.status_message = "READY"
 
+        # Manual Teleoperation State (End-Effector Cartesian Position & Orientation)
+        self.manual_arm_pos = [0.50, 0.00, 0.35]
+        self.manual_arm_yaw = 0.0
+        self.gripper_is_open = True
+
         # Multi-View Dynamic 3D Camera Presets
         self.camera_presets = [
             ("Isometric Studio (3D)", 1.05, 48.0, -28.0, [0.48, 0.08, 0.12]),
@@ -87,8 +97,109 @@ class InteractivePlayground:
         self._update_3d_hud()
         self._print_help()
 
+    def manual_jog_arm(self, dx=0.0, dy=0.0, dz=0.0, dyaw_deg=0.0, toggle_gripper=None):
+        """Teleoperates the Franka Panda arm in Cartesian space via keyboard."""
+        self.manual_arm_pos[0] = max(0.20, min(0.75, self.manual_arm_pos[0] + dx))
+        self.manual_arm_pos[1] = max(-0.35, min(0.35, self.manual_arm_pos[1] + dy))
+        self.manual_arm_pos[2] = max(0.03, min(0.60, self.manual_arm_pos[2] + dz))
+        self.manual_arm_yaw += np.radians(dyaw_deg)
+
+        if toggle_gripper is not None:
+            if toggle_gripper:
+                self.env.robot.open_gripper(steps=20)
+                self.gripper_is_open = True
+                print("  [Manual] Gripper Opened.")
+            else:
+                self.env.robot.close_gripper(force=120.0, steps=20)
+                self.gripper_is_open = False
+                print("  [Manual] Gripper Closed (120N squeeze).")
+
+        self.env.robot.move_to_cartesian(
+            self.manual_arm_pos,
+            target_yaw=self.manual_arm_yaw,
+            steps=10
+        )
+        self.status_message = f"MANUAL [{self.manual_arm_pos[0]:.2f}, {self.manual_arm_pos[1]:.2f}, {self.manual_arm_pos[2]:.2f}]"
+        self._update_3d_hud()
+        if self.show_dashboard:
+            self.render_console()
+
+    def _on_mouse_click(self, event, x, y, flags, param):
+        """Dispatches mouse clicks on buttons and steppers in the OpenCV command console."""
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+
+        action = self.visualizer.get_action_at(x, y)
+        if not action:
+            return
+
+        print(f"\n[Console Click] Action: {action.upper()}")
+        if action == "detect":
+            self.run_detection()
+        elif action == "execute":
+            self.execute_single_grasp()
+        elif action == "pick_all":
+            self.batch_pick(target_count=None)
+        elif action == "batch_pick":
+            self.batch_pick(target_count=self.batch_count)
+        elif action == "respawn":
+            self.respawn_objects()
+        elif action == "home":
+            print("\n[Home] Returning robot arm smoothly to home posture...")
+            self.env.robot.move_to_home(steps=60)
+            self.manual_arm_pos = [0.50, 0.00, 0.35]
+            self.manual_arm_yaw = 0.0
+            self.status_message = "ROBOT AT HOME"
+            self._update_3d_hud()
+        elif action == "camera":
+            self.set_camera_view()
+        elif action == "quit":
+            print("\n[Console] Quit requested via Quit button.")
+            self._quit_requested = True
+        elif action == "spawn_minus":
+            self.num_objects = max(1, self.num_objects - 1)
+            print(f"[Config] Spawn count: {self.num_objects}")
+            self._update_3d_hud()
+        elif action == "spawn_plus":
+            self.num_objects = min(8, self.num_objects + 1)
+            print(f"[Config] Spawn count: {self.num_objects}")
+            self._update_3d_hud()
+        elif action == "batch_minus":
+            self.batch_count = max(1, self.batch_count - 1)
+            print(f"[Config] Batch pick count: {self.batch_count}")
+            self._update_3d_hud()
+        elif action == "batch_plus":
+            self.batch_count = min(8, self.batch_count + 1)
+            print(f"[Config] Batch pick count: {self.batch_count}")
+            self._update_3d_hud()
+
+        self.render_console()
+
+    def render_console(self):
+        """Renders the 1440x820 Industrial Command Console and displays via OpenCV."""
+        if not self.show_dashboard:
+            return
+
+        rgb, depth, _ = self.env.get_observation()
+        clutter_n = len(self.get_table_objects())
+        console = self.visualizer.create_command_console(
+            rgb=rgb,
+            depth=depth,
+            heatmaps=self.last_heatmaps,
+            grasps=self.last_grasps,
+            telemetry=self.last_telemetry,
+            force_snapshot=self.last_force_snapshot,
+            status_msg=self.status_message,
+            spawn_count=self.num_objects,
+            batch_count=self.batch_count,
+            success_stats=(self.successful_grasps, self.grasp_attempts),
+            clutter_count=clutter_n
+        )
+        cv2.imshow(self.console_window, console)
+        cv2.waitKey(1)
+
     def _setup_gui_controls(self):
-        """Create PyBullet GUI sliders and action buttons."""
+        """Create PyBullet GUI sliders and action buttons (accessible when GUI panels are toggled on)."""
         # Section Header Text in 3D Scene
         p.addUserDebugText(
             "✦ CPS PICKBOT STUDIO ✦",
@@ -97,24 +208,25 @@ class InteractivePlayground:
             textSize=1.4
         )
 
-        # Action Buttons (Sacrificial '>>' prefix absorbs OpenGL 3 vertex 0 quad artifact)
-        self.btn_detect = p.addUserDebugParameter(">> [1] DETECT GRASPS <<", 1, 0, 0)
-        self.btn_execute = p.addUserDebugParameter(">> [2] EXECUTE NEXT GRASP <<", 1, 0, 0)
-        self.btn_pick_all = p.addUserDebugParameter(">> [3] PICK ALL (CLEAR SCENE) <<", 1, 0, 0)
-        self.btn_batch_pick = p.addUserDebugParameter(">> [4] PICK BATCH (COUNT) <<", 1, 0, 0)
-        self.btn_respawn = p.addUserDebugParameter(">> [5] RESPAWN OBJECTS <<", 1, 0, 0)
-        self.btn_reset_robot = p.addUserDebugParameter(">> [6] RESET ROBOT TO HOME <<", 1, 0, 0)
-        self.btn_cam = p.addUserDebugParameter(">> [7] SWITCH CAMERA VIEW <<", 1, 0, 0)
+        # Extra space padding + sacrificial marker so the first letters of all buttons & sliders are 100% visible
+        PAD = "       >> "
+        self.btn_detect = p.addUserDebugParameter(PAD + "[1] DETECT GRASPS <<", 1, 0, 0)
+        self.btn_execute = p.addUserDebugParameter(PAD + "[2] EXECUTE NEXT GRASP <<", 1, 0, 0)
+        self.btn_pick_all = p.addUserDebugParameter(PAD + "[3] PICK ALL (CLEAR SCENE) <<", 1, 0, 0)
+        self.btn_batch_pick = p.addUserDebugParameter(PAD + "[4] PICK BATCH (COUNT) <<", 1, 0, 0)
+        self.btn_respawn = p.addUserDebugParameter(PAD + "[5] RESPAWN OBJECTS <<", 1, 0, 0)
+        self.btn_reset_robot = p.addUserDebugParameter(PAD + "[6] RESET ROBOT TO HOME <<", 1, 0, 0)
+        self.btn_cam = p.addUserDebugParameter(PAD + "[7] SWITCH CAMERA VIEW <<", 1, 0, 0)
 
-        # Configuration Sliders (Prefix prevents first letter of words from ever being clipped)
-        self.slider_num_obj = p.addUserDebugParameter(">> Spawn Count [1 to 8]", 1, 8, self.num_objects)
-        self.slider_batch_count = p.addUserDebugParameter(">> Batch Pick Count [1 to 8]", 1, 8, 2)
+        # Configuration Sliders (Padded so 'Spawn' and 'Batch' first letters are completely intact)
+        self.slider_num_obj = p.addUserDebugParameter(PAD + "Spawn Count [1 to 8]", 1, 8, self.num_objects)
+        self.slider_batch_count = p.addUserDebugParameter(PAD + "Batch Pick Count [1 to 8]", 1, 8, self.batch_count)
 
-        # Manual Arm Controls (X, Y, Z, Yaw)
-        self.slider_x = p.addUserDebugParameter(">> Manual Arm X", 0.20, 0.80, 0.50)
-        self.slider_y = p.addUserDebugParameter(">> Manual Arm Y", -0.40, 0.40, 0.00)
-        self.slider_z = p.addUserDebugParameter(">> Manual Arm Z", 0.05, 0.60, 0.35)
-        self.slider_yaw = p.addUserDebugParameter(">> Manual Gripper Yaw", -180, 180, 0)
+        # Manual Arm Controls (Padded so 'Manual' first letter is completely intact)
+        self.slider_x = p.addUserDebugParameter(PAD + "Manual Arm X", 0.20, 0.80, 0.50)
+        self.slider_y = p.addUserDebugParameter(PAD + "Manual Arm Y", -0.40, 0.40, 0.00)
+        self.slider_z = p.addUserDebugParameter(PAD + "Manual Arm Z", 0.05, 0.60, 0.35)
+        self.slider_yaw = p.addUserDebugParameter(PAD + "Manual Gripper Yaw", -180, 180, 0)
 
         # Store previous button values to detect user clicks
         self.prev_detect = p.readUserDebugParameter(self.btn_detect)
@@ -124,6 +236,15 @@ class InteractivePlayground:
         self.prev_respawn = p.readUserDebugParameter(self.btn_respawn)
         self.prev_reset_robot = p.readUserDebugParameter(self.btn_reset_robot)
         self.prev_cam = p.readUserDebugParameter(self.btn_cam)
+
+    def toggle_gui(self):
+        """Toggles PyBullet GUI sidebar panels on or off."""
+        self.gui_visible = not self.gui_visible
+        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1 if self.gui_visible else 0)
+        state = "PANELS ENABLED" if self.gui_visible else "CLEAN STUDIO MODE"
+        print(f"\n[Visualizer] PyBullet Viewport: {state}")
+        self.status_message = f"VIEW: {state}"
+        self._update_3d_hud()
 
     def set_camera_view(self, idx=None):
         """Switches PyBullet 3D viewport between calibrated camera presets."""
@@ -138,6 +259,9 @@ class InteractivePlayground:
             cameraPitch=pitch,
             cameraTargetPosition=target
         )
+        print(f"\n[Camera Controller] Active View: {name}")
+        self.status_message = f"VIEW: {name.split()[0]}"
+        self._update_3d_hud()
         print(f"\n[Camera Controller] Active View: {name}")
         self.status_message = f"VIEW: {name.split()[0]}"
         self._update_3d_hud()
@@ -164,8 +288,8 @@ class InteractivePlayground:
 
         table_objs = self.get_table_objects()
         tray_objs = self.get_tray_objects()
-        spawn_n = int(round(p.readUserDebugParameter(self.slider_num_obj)))
-        batch_n = int(round(p.readUserDebugParameter(self.slider_batch_count)))
+        spawn_n = self.num_objects
+        batch_n = self.batch_count
 
         rate_str = f"{100.0 * self.successful_grasps / max(1, self.grasp_attempts):.0f}%" if self.grasp_attempts > 0 else "N/A"
 
@@ -191,33 +315,44 @@ class InteractivePlayground:
     def _print_help(self):
         """Print interactive control commands."""
         print()
-        print("=" * 75)
-        print("  INTERACTIVE GUI CONTROLS & CAMERA PRESETS:")
-        print("=" * 75)
-        print("  [Action Buttons - Right Panel]")
-        print("    >> [1] DETECT GRASPS       : Run GG-CNN inference on remaining objects")
-        print("    >> [2] EXECUTE NEXT GRASP  : Pick next object into tray (auto-refreshes)")
-        print("    >> [3] PICK ALL (AUTONOMOUS): Pick all objects one-by-one until scene is clear")
-        print("    >> [4] PICK BATCH (COUNT)  : Pick exact count set by 'Batch Pick Count' slider")
-        print("    >> [5] RESPAWN OBJECTS     : Clear scene and spawn new randomized objects")
-        print("    >> [6] RESET ROBOT TO HOME : Smoothly return arm to tucked home posture")
-        print("    >> [7] SWITCH CAMERA VIEW  : Cycle 3D camera (Isometric / OTS / Overhead / Side)")
+        print("=" * 78)
+        print("  ✦ CYBER-PHYSICAL PICKBOT STUDIO: CLEAN COMMAND & HOTKEY REFERENCE ✦")
+        print("=" * 78)
+        print("  Controls work seamlessly from EITHER the PyBullet 3D Window OR OpenCV Dashboard:")
         print()
-        print("  [Keyboard Shortcuts]")
-        print("    'c' or 'C' : Cycle 3D camera view")
-        print("    '1' to '4' : Direct jump to camera presets:")
-        print("                 1 = Isometric Studio | 2 = Over-The-Shoulder (OTS)")
-        print("                 3 = Top-Down Overhead | 4 = Side Clearance Profile")
-        print("    'd' or 'D' : Trigger grasp detection")
-        print("    'e' or 'E' : Execute next pick-and-place")
-        print("    'r' or 'R' : Reset robot arm to home posture")
-        print("    'q'        : Quit application")
+        print("  [Autonomous & Manipulation Actions]")
+        print("    'd' or 'D'         : Run GG-CNN Grasp Detection & Visualizer")
+        print("    'e' or [Space]     : Execute Next Best Grasp (Pick -> Lift -> Tray)")
+        print("    'a' or 'A'         : Pick All (Autonomous loop until table is fully cleared)")
+        print("    'b' or 'B'         : Pick Batch (Picks exact count set by Batch slider)")
+        print("    'r' or 'R'         : Respawn Scene (Clears & spawns randomized objects)")
+        print("    'h' or 'H'         : Reset Robot Home (Smooth return to neutral posture)")
         print()
-        print("  [OpenCV Dashboard Window]")
-        print("    Displays live 4-panel RGB, Depth, Quality Heatmap, and Angle Map.")
+        print("  [Manual Gripper Teleoperation & Jogging]")
+        print("    Arrow Keys (↑ / ↓) : Move Gripper Forward / Backward along table (X axis)")
+        print("    Arrow Keys (← / →) : Move Gripper Left / Right along table (Y axis)")
+        print("    PageUp / PageDown  : Move Gripper Up / Down (Z axis) [or 'u' / 'j']")
+        print("    '<' or '>' (,/.)   : Rotate Gripper Yaw Angle (Wrist orientation)")
+        print("    'o' or 'O'         : Open Gripper Fingers (to 8cm width)")
+        print("    'p' or 'P'         : Close / Squeeze Gripper (120N force closure)")
         print()
-        print("  Press Ctrl+C in terminal or 'q' in OpenCV window to exit.")
-        print("=" * 75)
+        print("  [3D Camera Presets]")
+        print("    '1'                : Isometric Studio (3D Global Overview)")
+        print("    '2'                : Over-The-Shoulder (OTS Workspace Alignment)")
+        print("    '3'                : Top-Down Overhead (90° Metric Inspection)")
+        print("    '4'                : Side Clearance Profile (Lift & Height Verification)")
+        print("    'c' or 'C'         : Cycle Through Camera Presets (1 -> 2 -> 3 -> 4)")
+        print()
+        print("  [Configuration & Telemetry]")
+        print("    '+' / '-'          : Step Spawn Count (+1 / -1)")
+        print("    ']' / '['          : Step Batch Pick Count (+1 / -1)")
+        print("    'g' or 'G'         : Toggle PyBullet Sidebars (Clean Studio <-> Debug Panels)")
+        print("    'q' or [Esc]       : Quit Simulation")
+        print()
+        print("  [Live Telemetry Displays]")
+        print("    - Floating 3D HUD  : Real-time Status, Clutter Counts, Force Closure & Joint Torques")
+        print("    - OpenCV Window    : 4-Panel RGB-D, Inferno Heatmap, Angle Quivers & Trackbars")
+        print("=" * 78)
         print()
 
     def get_table_objects(self):
@@ -357,11 +492,9 @@ class InteractivePlayground:
 
         self._update_3d_hud()
 
-        # Update OpenCV dashboard
-        if self.show_dashboard and heatmaps:
-            dashboard = self.visualizer.create_dashboard(rgb, depth, heatmaps, valid_grasps, telemetry)
-            cv2.imshow("CPS Grasp Detection Dashboard", cv2.cvtColor(dashboard, cv2.COLOR_RGB2BGR))
-            cv2.waitKey(1)
+        # Update OpenCV Command Console
+        if self.show_dashboard:
+            self.render_console()
 
         return valid_grasps
 
@@ -429,6 +562,7 @@ class InteractivePlayground:
             self._clear_grasp_markers()
             self.status_message = "SCENE CLEARED! ALL IN TRAY"
             self._update_3d_hud()
+            self.render_console()
 
         return result["success"]
 
@@ -496,11 +630,13 @@ class InteractivePlayground:
         else:
             self.last_grasps.clear()
             self._clear_grasp_markers()
+            self.render_console()
 
-    def respawn_objects(self):
-        """Clear scene and spawn randomized objects matching the integer slider count."""
-        num = int(round(p.readUserDebugParameter(self.slider_num_obj)))
-        num = max(1, min(8, num))
+    def respawn_objects(self, count=None):
+        """Clear scene and spawn randomized objects matching the integer count."""
+        num = count if count is not None else self.num_objects
+        num = max(1, min(8, int(round(num))))
+        self.num_objects = num
         print(f"\n[Respawn] Spawning {num} new calibrated objects...")
         self._clear_grasp_markers()
         self.last_grasps = []
@@ -509,16 +645,23 @@ class InteractivePlayground:
             self.env.step()
         self.status_message = f"RESPAWNED {num} OBJECTS"
         self._update_3d_hud()
+        self.render_console()
         obj_info = self.env.spawner.get_object_info()
         print(f"  Spawned: {', '.join(o['name'] for o in obj_info)}")
 
     def run(self):
         """Main interactive loop."""
-        print("\n[Playground] Active! Use GUI controls on the right panel or press Ctrl+C to exit.\n")
+        mode_str = "Legacy GUI Panels Visible" if self.gui_visible else "Clean Studio Viewport (0 Debug Panels)"
+        print(f"\n[Playground] Active! {mode_str}.\n"
+              f"  Interactive surface: {self.console_window} (1440x820)\n"
+              f"  Click buttons/steppers in the console, or use keyboard shortcuts in either window.\n"
+              f"  Press 'g' to toggle PyBullet sidebars, or 'q' / Esc to exit.\n")
 
         if self.show_dashboard:
-            cv2.namedWindow("CPS Grasp Detection Dashboard", cv2.WINDOW_NORMAL)
-            cv2.resizeWindow("CPS Grasp Detection Dashboard", 820, 520)
+            cv2.namedWindow(self.console_window, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(self.console_window, 1440, 820)
+            cv2.setMouseCallback(self.console_window, self._on_mouse_click)
+            self.render_console()
 
         # Track previous slider values to only move robot on explicit slider adjustment
         prev_slider_vals = (
@@ -527,85 +670,79 @@ class InteractivePlayground:
             p.readUserDebugParameter(self.slider_z),
             p.readUserDebugParameter(self.slider_yaw)
         )
-        prev_spawn_n = int(round(p.readUserDebugParameter(self.slider_num_obj)))
-        prev_batch_n = int(round(p.readUserDebugParameter(self.slider_batch_count)))
+        prev_spawn_n = self.num_objects
+        prev_batch_n = self.batch_count
+        last_console_time = 0.0
 
         try:
-            while True:
-                # 1. Check if configuration sliders changed to update 3D HUD
-                curr_spawn_n = int(round(p.readUserDebugParameter(self.slider_num_obj)))
-                curr_batch_n = int(round(p.readUserDebugParameter(self.slider_batch_count)))
-                if curr_spawn_n != prev_spawn_n or curr_batch_n != prev_batch_n:
-                    prev_spawn_n = curr_spawn_n
-                    prev_batch_n = curr_batch_n
-                    self._update_3d_hud()
+            while not self._quit_requested:
+                now = time.time()
 
-                # 2. Check manual arm sliders
-                tx = p.readUserDebugParameter(self.slider_x)
-                ty = p.readUserDebugParameter(self.slider_y)
-                tz = p.readUserDebugParameter(self.slider_z)
-                tyaw_deg = p.readUserDebugParameter(self.slider_yaw)
-                tyaw = np.radians(tyaw_deg)
-                curr_sliders = (tx, ty, tz, tyaw_deg)
+                # 1. Check if PyBullet configuration sliders changed (when GUI panels are enabled)
+                if self.gui_visible:
+                    curr_spawn_n = int(round(p.readUserDebugParameter(self.slider_num_obj)))
+                    curr_batch_n = int(round(p.readUserDebugParameter(self.slider_batch_count)))
+                    if curr_spawn_n != prev_spawn_n or curr_batch_n != prev_batch_n:
+                        prev_spawn_n = curr_spawn_n
+                        prev_batch_n = curr_batch_n
+                        self.num_objects = curr_spawn_n
+                        self.batch_count = curr_batch_n
+                        self._update_3d_hud()
+                        self.render_console()
 
-                if any(abs(c - p_val) > 0.005 for c, p_val in zip(curr_sliders, prev_slider_vals)):
-                    prev_slider_vals = curr_sliders
-                    self.env.robot.move_to_cartesian([tx, ty, tz], target_yaw=tyaw, steps=1)
+                    # 2. Check manual arm sliders
+                    tx = p.readUserDebugParameter(self.slider_x)
+                    ty = p.readUserDebugParameter(self.slider_y)
+                    tz = p.readUserDebugParameter(self.slider_z)
+                    tyaw_deg = p.readUserDebugParameter(self.slider_yaw)
+                    tyaw = np.radians(tyaw_deg)
+                    curr_sliders = (tx, ty, tz, tyaw_deg)
 
-                # 3. Check Action Button Clicks
-                # [1] Detect Grasps
-                curr_detect = p.readUserDebugParameter(self.btn_detect)
-                if curr_detect != self.prev_detect:
-                    self.prev_detect = curr_detect
-                    self.run_detection()
+                    if any(abs(c - p_val) > 0.005 for c, p_val in zip(curr_sliders, prev_slider_vals)):
+                        prev_slider_vals = curr_sliders
+                        self.env.robot.move_to_cartesian([tx, ty, tz], target_yaw=tyaw, steps=1)
 
-                # [2] Execute Single Next Grasp
-                curr_execute = p.readUserDebugParameter(self.btn_execute)
-                if curr_execute != self.prev_execute:
-                    self.prev_execute = curr_execute
-                    self.execute_single_grasp()
+                    # 3. Check Action Button Clicks
+                    curr_detect = p.readUserDebugParameter(self.btn_detect)
+                    if curr_detect != self.prev_detect:
+                        self.prev_detect = curr_detect
+                        self.run_detection()
 
-                # [3] Pick All (Clear Scene)
-                curr_pick_all = p.readUserDebugParameter(self.btn_pick_all)
-                if curr_pick_all != self.prev_pick_all:
-                    self.prev_pick_all = curr_pick_all
-                    self.batch_pick(target_count=None)
+                    curr_execute = p.readUserDebugParameter(self.btn_execute)
+                    if curr_execute != self.prev_execute:
+                        self.prev_execute = curr_execute
+                        self.execute_single_grasp()
 
-                # [4] Pick Batch (Specified Count)
-                curr_batch_pick = p.readUserDebugParameter(self.btn_batch_pick)
-                if curr_batch_pick != self.prev_batch_pick:
-                    self.prev_batch_pick = curr_batch_pick
-                    batch_target = int(round(p.readUserDebugParameter(self.slider_batch_count)))
-                    self.batch_pick(target_count=batch_target)
+                    curr_pick_all = p.readUserDebugParameter(self.btn_pick_all)
+                    if curr_pick_all != self.prev_pick_all:
+                        self.prev_pick_all = curr_pick_all
+                        self.batch_pick(target_count=None)
 
-                # [5] Respawn Objects
-                curr_respawn = p.readUserDebugParameter(self.btn_respawn)
-                if curr_respawn != self.prev_respawn:
-                    self.prev_respawn = curr_respawn
-                    self.respawn_objects()
+                    curr_batch_pick = p.readUserDebugParameter(self.btn_batch_pick)
+                    if curr_batch_pick != self.prev_batch_pick:
+                        self.prev_batch_pick = curr_batch_pick
+                        self.batch_pick(target_count=self.batch_count)
 
-                # [6] Reset Robot
-                curr_reset = p.readUserDebugParameter(self.btn_reset_robot)
-                if curr_reset != self.prev_reset_robot:
-                    self.prev_reset_robot = curr_reset
-                    print("\n[Reset] Returning robot arm smoothly to home posture...")
-                    self.env.robot.move_to_home(steps=60)
-                    prev_slider_vals = (
-                        p.readUserDebugParameter(self.slider_x),
-                        p.readUserDebugParameter(self.slider_y),
-                        p.readUserDebugParameter(self.slider_z),
-                        p.readUserDebugParameter(self.slider_yaw)
-                    )
-                    self.status_message = "ROBOT AT HOME"
-                    self._update_3d_hud()
+                    curr_respawn = p.readUserDebugParameter(self.btn_respawn)
+                    if curr_respawn != self.prev_respawn:
+                        self.prev_respawn = curr_respawn
+                        self.respawn_objects()
 
-                # [7] Switch 3D Camera View
-                curr_cam = p.readUserDebugParameter(self.btn_cam)
-                if curr_cam != self.prev_cam:
-                    self.prev_cam = curr_cam
-                    self.set_camera_view()
+                    curr_reset = p.readUserDebugParameter(self.btn_reset_robot)
+                    if curr_reset != self.prev_reset_robot:
+                        self.prev_reset_robot = curr_reset
+                        print("\n[Reset] Returning robot arm smoothly to home posture...")
+                        self.env.robot.move_to_home(steps=60)
+                        self.status_message = "ROBOT AT HOME"
+                        self._update_3d_hud()
+                        self.render_console()
 
-                # 4. Check Keyboard Shortcuts in PyBullet GUI
+                    curr_cam = p.readUserDebugParameter(self.btn_cam)
+                    if curr_cam != self.prev_cam:
+                        self.prev_cam = curr_cam
+                        self.set_camera_view()
+
+                # 4. Check Keyboard Shortcuts in PyBullet GUI Window
                 keys = p.getKeyboardEvents()
                 if (ord('c') in keys and (keys[ord('c')] & p.KEY_WAS_TRIGGERED)) or \
                    (ord('C') in keys and (keys[ord('C')] & p.KEY_WAS_TRIGGERED)):
@@ -618,25 +755,148 @@ class InteractivePlayground:
                    (ord('D') in keys and (keys[ord('D')] & p.KEY_WAS_TRIGGERED)):
                     self.run_detection()
                 if (ord('e') in keys and (keys[ord('e')] & p.KEY_WAS_TRIGGERED)) or \
-                   (ord('E') in keys and (keys[ord('E')] & p.KEY_WAS_TRIGGERED)):
+                   (ord('E') in keys and (keys[ord('E')] & p.KEY_WAS_TRIGGERED)) or \
+                   (32 in keys and (keys[32] & p.KEY_WAS_TRIGGERED)):
                     self.execute_single_grasp()
+                if (ord('a') in keys and (keys[ord('a')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('A') in keys and (keys[ord('A')] & p.KEY_WAS_TRIGGERED)):
+                    self.batch_pick(target_count=None)
+                if (ord('b') in keys and (keys[ord('b')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('B') in keys and (keys[ord('B')] & p.KEY_WAS_TRIGGERED)):
+                    self.batch_pick(target_count=self.batch_count)
                 if (ord('r') in keys and (keys[ord('r')] & p.KEY_WAS_TRIGGERED)) or \
                    (ord('R') in keys and (keys[ord('R')] & p.KEY_WAS_TRIGGERED)):
+                    self.respawn_objects()
+                if (ord('h') in keys and (keys[ord('h')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('H') in keys and (keys[ord('H')] & p.KEY_WAS_TRIGGERED)):
                     self.env.robot.move_to_home(steps=60)
+                    self.manual_arm_pos = [0.50, 0.00, 0.35]
+                    self.manual_arm_yaw = 0.0
                     self.status_message = "ROBOT AT HOME"
                     self._update_3d_hud()
+                    self.render_console()
+
+                # Manual Jogging Controls (PyBullet)
+                if p.B3G_UP_ARROW in keys and (keys[p.B3G_UP_ARROW] & (p.KEY_WAS_TRIGGERED | p.KEY_IS_DOWN)):
+                    self.manual_jog_arm(dx=+0.015)
+                if p.B3G_DOWN_ARROW in keys and (keys[p.B3G_DOWN_ARROW] & (p.KEY_WAS_TRIGGERED | p.KEY_IS_DOWN)):
+                    self.manual_jog_arm(dx=-0.015)
+                if p.B3G_LEFT_ARROW in keys and (keys[p.B3G_LEFT_ARROW] & (p.KEY_WAS_TRIGGERED | p.KEY_IS_DOWN)):
+                    self.manual_jog_arm(dy=+0.015)
+                if p.B3G_RIGHT_ARROW in keys and (keys[p.B3G_RIGHT_ARROW] & (p.KEY_WAS_TRIGGERED | p.KEY_IS_DOWN)):
+                    self.manual_jog_arm(dy=-0.015)
+                if (p.B3G_PAGE_UP in keys and (keys[p.B3G_PAGE_UP] & (p.KEY_WAS_TRIGGERED | p.KEY_IS_DOWN))) or \
+                   (ord('u') in keys and (keys[ord('u')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('U') in keys and (keys[ord('U')] & p.KEY_WAS_TRIGGERED)):
+                    self.manual_jog_arm(dz=+0.015)
+                if (p.B3G_PAGE_DOWN in keys and (keys[p.B3G_PAGE_DOWN] & (p.KEY_WAS_TRIGGERED | p.KEY_IS_DOWN))) or \
+                   (ord('j') in keys and (keys[ord('j')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('J') in keys and (keys[ord('J')] & p.KEY_WAS_TRIGGERED)):
+                    self.manual_jog_arm(dz=-0.015)
+                if (ord(',') in keys and (keys[ord(',')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('<') in keys and (keys[ord('<')] & p.KEY_WAS_TRIGGERED)):
+                    self.manual_jog_arm(dyaw_deg=+10.0)
+                if (ord('.') in keys and (keys[ord('.')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('>') in keys and (keys[ord('>')] & p.KEY_WAS_TRIGGERED)):
+                    self.manual_jog_arm(dyaw_deg=-10.0)
+                if (ord('o') in keys and (keys[ord('o')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('O') in keys and (keys[ord('O')] & p.KEY_WAS_TRIGGERED)):
+                    self.manual_jog_arm(toggle_gripper=True)
+                if (ord('p') in keys and (keys[ord('p')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('P') in keys and (keys[ord('P')] & p.KEY_WAS_TRIGGERED)):
+                    self.manual_jog_arm(toggle_gripper=False)
+                if (ord('g') in keys and (keys[ord('g')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('G') in keys and (keys[ord('G')] & p.KEY_WAS_TRIGGERED)):
+                    self.toggle_gui()
+                if (ord('+') in keys and (keys[ord('+')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('=') in keys and (keys[ord('=')] & p.KEY_WAS_TRIGGERED)):
+                    self.num_objects = min(8, self.num_objects + 1)
+                    self._update_3d_hud()
+                    self.render_console()
+                if (ord('-') in keys and (keys[ord('-')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('_') in keys and (keys[ord('_')] & p.KEY_WAS_TRIGGERED)):
+                    self.num_objects = max(1, self.num_objects - 1)
+                    self._update_3d_hud()
+                    self.render_console()
+                if ord(']') in keys and (keys[ord(']')] & p.KEY_WAS_TRIGGERED):
+                    self.batch_count = min(8, self.batch_count + 1)
+                    self._update_3d_hud()
+                    self.render_console()
+                if ord('[') in keys and (keys[ord('[')] & p.KEY_WAS_TRIGGERED):
+                    self.batch_count = max(1, self.batch_count - 1)
+                    self._update_3d_hud()
+                    self.render_console()
+                if (ord('q') in keys and (keys[ord('q')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('Q') in keys and (keys[ord('Q')] & p.KEY_WAS_TRIGGERED)):
+                    print("\n[PyBullet] Quit requested by user ('q' key).")
+                    break
 
                 self.env.step()
 
+                # 5. Check Keyboard Shortcuts in OpenCV Command Console
                 if self.show_dashboard:
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord('q'):
-                        print("\n[Dashboard] Quit requested by user ('q' key).")
-                        break
-                    elif key in [ord('c'), ord('C')]:
-                        self.set_camera_view()
-                    elif key in [ord('1'), ord('2'), ord('3'), ord('4')]:
-                        self.set_camera_view(int(chr(key)) - 1)
+                    raw_k = cv2.waitKey(1)
+                    if raw_k != -1:
+                        key = raw_k & 0xFF
+                        if key in [ord('q'), ord('Q'), 27]:
+                            print("\n[Console] Quit requested by user ('q' key).")
+                            break
+                        elif key in [ord('c'), ord('C')]:
+                            self.set_camera_view()
+                        elif key in [ord('1'), ord('2'), ord('3'), ord('4')]:
+                            self.set_camera_view(int(chr(key)) - 1)
+                        elif key in [ord('d'), ord('D')]:
+                            self.run_detection()
+                        elif key in [ord('e'), ord('E'), ord(' ')]:
+                            self.execute_single_grasp()
+                        elif key in [ord('a'), ord('A')]:
+                            self.batch_pick(target_count=None)
+                        elif key in [ord('b'), ord('B')]:
+                            self.batch_pick(target_count=self.batch_count)
+                        elif key in [ord('r'), ord('R')]:
+                            self.respawn_objects()
+                        elif key in [ord('h'), ord('H')]:
+                            self.env.robot.move_to_home(steps=60)
+                            self.manual_arm_pos = [0.50, 0.00, 0.35]
+                            self.manual_arm_yaw = 0.0
+                            self.status_message = "ROBOT AT HOME"
+                            self._update_3d_hud()
+                            self.render_console()
+                        elif key in [ord('g'), ord('G')]:
+                            self.toggle_gui()
+                        elif key in [ord('u'), ord('U')]:
+                            self.manual_jog_arm(dz=+0.02)
+                        elif key in [ord('j'), ord('J')]:
+                            self.manual_jog_arm(dz=-0.02)
+                        elif key in [ord(','), ord('<')]:
+                            self.manual_jog_arm(dyaw_deg=+10.0)
+                        elif key in [ord('.'), ord('>')]:
+                            self.manual_jog_arm(dyaw_deg=-10.0)
+                        elif key in [ord('o'), ord('O')]:
+                            self.manual_jog_arm(toggle_gripper=True)
+                        elif key in [ord('p'), ord('P')]:
+                            self.manual_jog_arm(toggle_gripper=False)
+                        elif key in [ord('+'), ord('=')]:
+                            self.num_objects = min(8, self.num_objects + 1)
+                            self._update_3d_hud()
+                            self.render_console()
+                        elif key in [ord('-'), ord('_')]:
+                            self.num_objects = max(1, self.num_objects - 1)
+                            self._update_3d_hud()
+                            self.render_console()
+                        elif key == ord(']'):
+                            self.batch_count = min(8, self.batch_count + 1)
+                            self._update_3d_hud()
+                            self.render_console()
+                        elif key == ord('['):
+                            self.batch_count = max(1, self.batch_count - 1)
+                            self._update_3d_hud()
+                            self.render_console()
+
+                # Refresh console at ~25-30 FPS to keep telemetry live
+                if self.show_dashboard and (now - last_console_time > 0.035):
+                    self.render_console()
+                    last_console_time = now
 
                 time.sleep(0.005)
 
@@ -652,7 +912,8 @@ class InteractivePlayground:
 def main():
     parser = argparse.ArgumentParser(description="CPS Interactive Simulation Playground (Deliverable 2)")
     parser.add_argument("--num-objects", type=int, default=3, help="Initial number of objects (1-8)")
-    parser.add_argument("--no-dashboard", action="store_true", help="Disable OpenCV dashboard window")
+    parser.add_argument("--no-dashboard", action="store_true", help="Disable OpenCV command console window")
+    parser.add_argument("--show-gui-panels", action="store_true", help="Start with legacy PyBullet sidebar GUI panels visible (Clean Studio Mode is default)")
     parser.add_argument("--checkpoint", type=str,
                         default="checkpoints/ggcnn_weights_cornell/ggcnn_epoch_23_cornell_statedict.pt",
                         help="Path to GG-CNN model weights")
@@ -661,6 +922,7 @@ def main():
     playground = InteractivePlayground(
         num_objects=args.num_objects,
         show_dashboard=not args.no_dashboard,
+        enable_gui_panels=args.show_gui_panels,
         checkpoint=args.checkpoint,
     )
     playground.run()

@@ -29,8 +29,9 @@ class GraspingEnvironment:
     """
     Calibrated PyBullet picking environment fulfilling Deliverable 2 specifications.
     """
-    def __init__(self, gui=False):
+    def __init__(self, gui=False, enable_gui_panels=False):
         self.gui = gui
+        self.enable_gui_panels = enable_gui_panels
         connection_mode = p.GUI if self.gui else p.DIRECT
         self.client_id = p.connect(connection_mode)
 
@@ -53,7 +54,8 @@ class GraspingEnvironment:
                 shadowMapResolution=4096,
                 shadowMapIntensity=0.35
             )
-            p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1)
+            # Clean Studio Mode: Disable buggy 2D C++ ExampleBrowser and float sliders by default
+            p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1 if self.enable_gui_panels else 0)
             p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
             p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
             p.configureDebugVisualizer(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
