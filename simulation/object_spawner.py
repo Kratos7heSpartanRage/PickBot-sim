@@ -33,7 +33,7 @@ class ObjectSpawner:
         self.hud_text_ids = []
         self.data_path = pybullet_data.getDataPath()
 
-        # Studio presentation palette (vibrant, high contrast against dark mat)
+        # Studio presentation palette (16 vibrant, high-contrast studio colors)
         self.palette = [
             [0.92, 0.22, 0.20, 1.0],   # Coral Red
             [0.18, 0.55, 0.95, 1.0],   # Ocean Blue
@@ -43,10 +43,22 @@ class ObjectSpawner:
             [0.08, 0.88, 0.92, 1.0],   # Electric Cyan
             [0.98, 0.48, 0.12, 1.0],   # Tangerine Orange
             [0.95, 0.28, 0.65, 1.0],   # Hot Pink
+            [0.25, 0.80, 0.75, 1.0],   # Mint Turquoise
+            [0.85, 0.35, 0.15, 1.0],   # Burnt Amber
+            [0.45, 0.30, 0.85, 1.0],   # Royal Indigo
+            [0.80, 0.85, 0.20, 1.0],   # Lime Yellow
+            [0.30, 0.65, 0.40, 1.0],   # Forest Emerald
+            [0.95, 0.60, 0.75, 1.0],   # Pastel Rose
+            [0.15, 0.40, 0.70, 1.0],   # Deep Cobalt
+            [0.65, 0.75, 0.85, 1.0],   # Arctic Slate
         ]
 
         # Curated catalog definitions conforming to Eval 2 Engineering Spec (Page 7)
+        # Expanded to 16 diverse calibrated objects across 2 distinct batches of 8:
+        #   - Batch 1 (Objects 1-8): Original baseline benchmark set
+        #   - Batch 2 (Objects 9-16): Novel geometric variation test set
         self.catalog = [
+            # --- Batch 1: Primary Calibrated Objects ---
             {
                 "key": "cube",
                 "name": "Small Cube",
@@ -118,6 +130,75 @@ class ObjectSpawner:
                 "dims": (0.041, 0.039, 0.031),
                 "mass": 0.08,
                 "grasp_span": 0.042,
+            },
+            # --- Batch 2: Expanded Novel Geometric Variation Set ---
+            {
+                "key": "jenga",
+                "name": "Calibrated Jenga",
+                "type": "urdf",
+                "urdf_rel": "jenga/jenga.urdf",
+                "scale": 0.50,
+                "dims": (0.075, 0.025, 0.015),
+                "mass": 0.06,
+                "grasp_span": 0.025,
+            },
+            {
+                "key": "hex_spacer",
+                "name": "Hex Spacer",
+                "type": "primitive_cylinder",
+                "dims": (0.042, 0.042, 0.035),
+                "mass": 0.11,
+                "grasp_span": 0.042,
+            },
+            {
+                "key": "t_bracket",
+                "name": "T-Bracket",
+                "type": "compound_t_bracket",
+                "dims": (0.052, 0.030, 0.028),
+                "mass": 0.10,
+                "grasp_span": 0.030,
+            },
+            {
+                "key": "capsule",
+                "name": "Industrial Capsule",
+                "type": "primitive_capsule",
+                "dims": (0.032, 0.032, 0.048),
+                "mass": 0.07,
+                "grasp_span": 0.032,
+            },
+            {
+                "key": "wedge",
+                "name": "Machined Wedge",
+                "type": "primitive_box",
+                "dims": (0.048, 0.035, 0.024),
+                "mass": 0.09,
+                "grasp_span": 0.035,
+            },
+            {
+                "key": "disc_puck",
+                "name": "Precision Disc",
+                "type": "primitive_cylinder",
+                "dims": (0.048, 0.048, 0.020),
+                "mass": 0.09,
+                "grasp_span": 0.048,
+            },
+            {
+                "key": "small_block",
+                "name": "Precision Block",
+                "type": "urdf",
+                "urdf_rel": "block.urdf",
+                "scale": 0.80,
+                "dims": (0.040, 0.040, 0.040),
+                "mass": 0.07,
+                "grasp_span": 0.040,
+            },
+            {
+                "key": "reagent_bottle",
+                "name": "Reagent Bottle",
+                "type": "compound_bottle",
+                "dims": (0.038, 0.038, 0.060),
+                "mass": 0.12,
+                "grasp_span": 0.038,
             },
         ]
 
@@ -241,6 +322,65 @@ class ObjectSpawner:
         )
         return body_id
 
+    def _create_primitive_capsule(self, dims, color, pos, orn, mass):
+        """Creates an industrial capsule primitive body."""
+        dia, _, height = dims
+        radius = dia / 2.0
+        cyl_h = max(0.01, height - dia)
+        col_id = p.createCollisionShape(p.GEOM_CAPSULE, radius=radius, height=cyl_h)
+        vis_id = p.createVisualShape(p.GEOM_CAPSULE, radius=radius, length=cyl_h, rgbaColor=color)
+        return p.createMultiBody(
+            baseMass=mass,
+            baseCollisionShapeIndex=col_id,
+            baseVisualShapeIndex=vis_id,
+            basePosition=pos,
+            baseOrientation=orn
+        )
+
+    def _create_t_bracket(self, color, pos, orn, mass):
+        """Creates a compound T-bracket primitive."""
+        col_id = p.createCollisionShapeArray(
+            [p.GEOM_BOX, p.GEOM_BOX],
+            halfExtents=[[0.026, 0.012, 0.007], [0.008, 0.012, 0.014]],
+            collisionFramePositions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.018]]
+        )
+        vis_id = p.createVisualShapeArray(
+            [p.GEOM_BOX, p.GEOM_BOX],
+            halfExtents=[[0.026, 0.012, 0.007], [0.008, 0.012, 0.014]],
+            visualFramePositions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.018]],
+            rgbaColors=[color, color]
+        )
+        return p.createMultiBody(
+            baseMass=mass,
+            baseCollisionShapeIndex=col_id,
+            baseVisualShapeIndex=vis_id,
+            basePosition=pos,
+            baseOrientation=orn
+        )
+
+    def _create_bottle(self, color, pos, orn, mass):
+        """Creates a compound reagent bottle primitive."""
+        col_id = p.createCollisionShapeArray(
+            [p.GEOM_CYLINDER, p.GEOM_CYLINDER],
+            radii=[0.019, 0.011],
+            lengths=[0.040, 0.020],
+            collisionFramePositions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.028]]
+        )
+        vis_id = p.createVisualShapeArray(
+            [p.GEOM_CYLINDER, p.GEOM_CYLINDER],
+            radii=[0.019, 0.011],
+            lengths=[0.040, 0.020],
+            visualFramePositions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.028]],
+            rgbaColors=[color, [0.88, 0.88, 0.92, 1.0]]
+        )
+        return p.createMultiBody(
+            baseMass=mass,
+            baseCollisionShapeIndex=col_id,
+            baseVisualShapeIndex=vis_id,
+            basePosition=pos,
+            baseOrientation=orn
+        )
+
     def _load_urdf_object(self, urdf_rel, scale, color, pos, orn, mass):
         """Loads a calibrated URDF object and tints all visual links."""
         urdf_path = os.path.join(self.data_path, urdf_rel)
@@ -287,19 +427,29 @@ class ObjectSpawner:
                 contactStiffness=50000.0
             )
 
-    def spawn_random_objects(self, num_objects=3):
+    def spawn_random_objects(self, num_objects=3, batch="all"):
         """
         Spawns a diverse, non-overlapping set of calibrated objects.
         Drops them from z = table_height + 0.04m and settles for 60 physics steps.
+        Supports batch selection:
+          - 'all'   : Random sampling across full 16-object library.
+          - 'batch1': Original primary 8 objects (Objects 1-8).
+          - 'batch2': Expanded novel variation set (Objects 9-16).
         """
         self.clear()
         num_objects = max(1, int(num_objects))
         positions = self._sample_positions(num_objects)
 
-        if num_objects <= len(self.catalog):
-            selected_entries = random.sample(self.catalog, num_objects)
+        catalog_pool = self.catalog
+        if batch == "batch1":
+            catalog_pool = self.catalog[:8]
+        elif batch == "batch2":
+            catalog_pool = self.catalog[8:]
+
+        if num_objects <= len(catalog_pool):
+            selected_entries = random.sample(catalog_pool, num_objects)
         else:
-            selected_entries = [random.choice(self.catalog) for _ in range(num_objects)]
+            selected_entries = [random.choice(catalog_pool) for _ in range(num_objects)]
 
         if num_objects <= len(self.palette):
             colors = random.sample(self.palette, num_objects)
@@ -323,6 +473,12 @@ class ObjectSpawner:
                 body_id = self._create_primitive_cylinder(entry["dims"], color, [x, y, z], orientation, entry["mass"])
             elif otype == "compound_l_bracket":
                 body_id = self._create_l_bracket(color, [x, y, z], orientation, entry["mass"])
+            elif otype == "compound_t_bracket":
+                body_id = self._create_t_bracket(color, [x, y, z], orientation, entry["mass"])
+            elif otype == "primitive_capsule":
+                body_id = self._create_primitive_capsule(entry["dims"], color, [x, y, z], orientation, entry["mass"])
+            elif otype == "compound_bottle":
+                body_id = self._create_bottle(color, [x, y, z], orientation, entry["mass"])
             elif otype == "urdf":
                 body_id = self._load_urdf_object(entry["urdf_rel"], entry["scale"], color, [x, y, z], orientation, entry["mass"])
 

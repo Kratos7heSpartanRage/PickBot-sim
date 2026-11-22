@@ -19,7 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 class Visualizer:
-    def __init__(self, panel_size=(600, 600)):
+    def __init__(self, panel_size=(600, 600), font_family="dejavu"):
         self.pw, self.ph = panel_size
         self.COLOR_TOP_JAW = (255, 240, 0)      # Vivid Cyan (BGR)
         self.COLOR_TOP_RECT = (50, 255, 50)     # Neon Green (BGR)
@@ -46,10 +46,44 @@ class Visualizer:
 
         # TrueType Font Rendering System (Anti-aliased, bold, Unicode-safe)
         self._font_cache = {}
-        self.font_bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        self.font_reg_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-        if not os.path.exists(self.font_bold_path):
-            self.font_bold_path = self.font_reg_path
+        self.set_font_family(font_family=font_family)
+
+    def set_font_family(self, font_family="dejavu"):
+        """
+        Dynamically changes the console typography to any font preset or custom .ttf/.otf file.
+        Presets: 'dejavu' (default), 'mono' (terminal), 'ubuntu' (modern sans), 'ubuntu_mono'.
+        """
+        presets = {
+            "dejavu": (
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+            ),
+            "mono": (
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+            ),
+            "ubuntu": (
+                "/usr/share/fonts/truetype/ubuntu/Ubuntu[wdth,wght].ttf",
+                "/usr/share/fonts/truetype/ubuntu/Ubuntu[wdth,wght].ttf"
+            ),
+            "ubuntu_mono": (
+                "/usr/share/fonts/truetype/ubuntu/UbuntuMono[wght].ttf",
+                "/usr/share/fonts/truetype/ubuntu/UbuntuMono[wght].ttf"
+            ),
+        }
+
+        if isinstance(font_family, str) and font_family.lower() in presets:
+            b_p, r_p = presets[font_family.lower()]
+            self.font_bold_path = b_p if os.path.exists(b_p) else r_p
+            self.font_reg_path = r_p if os.path.exists(r_p) else b_p
+        elif isinstance(font_family, str) and os.path.exists(font_family):
+            self.font_bold_path = font_family
+            self.font_reg_path = font_family
+        else:
+            self.font_bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            self.font_reg_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+        self._font_cache.clear()
 
     def _get_font(self, size=13, bold=True):
         key = (size, bold)

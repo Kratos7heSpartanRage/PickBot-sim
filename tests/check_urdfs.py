@@ -56,6 +56,12 @@ def test_object_catalog():
             body_id = spawner._create_primitive_cylinder(entry["dims"], [0, 1, 0, 1], [0.5, 0.0, 0.05], [0, 0, 0, 1], mass)
         elif otype == "compound_l_bracket":
             body_id = spawner._create_l_bracket([0, 0, 1, 1], [0.5, 0.0, 0.05], [0, 0, 0, 1], mass)
+        elif otype == "compound_t_bracket":
+            body_id = spawner._create_t_bracket([0, 0, 1, 1], [0.5, 0.0, 0.05], [0, 0, 0, 1], mass)
+        elif otype == "primitive_capsule":
+            body_id = spawner._create_primitive_capsule(entry["dims"], [1, 0, 1, 1], [0.5, 0.0, 0.05], [0, 0, 0, 1], mass)
+        elif otype == "compound_bottle":
+            body_id = spawner._create_bottle([0, 1, 1, 1], [0.5, 0.0, 0.05], [0, 0, 0, 1], mass)
         elif otype == "urdf":
             body_id = spawner._load_urdf_object(entry["urdf_rel"], entry["scale"], [1, 1, 0, 1], [0.5, 0.0, 0.05], [0, 0, 0, 1], mass)
 

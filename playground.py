@@ -31,7 +31,7 @@ from perception.visualizer import Visualizer
 class InteractivePlayground:
     """Full interactive simulation playground with PyBullet GUI + OpenCV HUD."""
 
-    def __init__(self, num_objects=3, show_dashboard=True, checkpoint=None, enable_gui_panels=False):
+    def __init__(self, num_objects=3, show_dashboard=True, checkpoint=None, enable_gui_panels=False, font="dejavu"):
         self.show_dashboard = show_dashboard
         self.num_objects = max(1, min(8, int(round(num_objects))))
         self.batch_count = 2
@@ -39,6 +39,7 @@ class InteractivePlayground:
         self.gui_visible = enable_gui_panels
         self.console_window = "CPS Industrial Command Console"
         self._quit_requested = False
+        self.font_family = font
 
         print("=" * 78)
         print("  ✦ CYBER PHYSICAL SYSTEMS: INTERACTIVE ROBOTIC PICK-AND-PLACE STUDIO ✦")
@@ -56,7 +57,7 @@ class InteractivePlayground:
             ckpt = "checkpoints/ggcnn_finetuned.pt"
         print(f"[2/3] Loading GG-CNN Perception Model: {ckpt}")
         self.detector = GraspDetector(checkpoint_path=ckpt)
-        self.visualizer = Visualizer()
+        self.visualizer = Visualizer(font_family=self.font_family)
         self.executor = GraspExecutor(self.env.robot, tray_pos=(0.45, 0.45, 0.22))
 
         # 3. Spawn initial calibrated scene
@@ -917,6 +918,8 @@ def main():
     parser.add_argument("--checkpoint", type=str,
                         default="checkpoints/ggcnn_weights_cornell/ggcnn_epoch_23_cornell_statedict.pt",
                         help="Path to GG-CNN model weights")
+    parser.add_argument("--font", type=str, default="dejavu",
+                        help="Console font preset ('dejavu', 'mono', 'ubuntu', 'ubuntu_mono') or path to custom .ttf/.otf")
     args = parser.parse_args()
 
     playground = InteractivePlayground(
@@ -924,6 +927,7 @@ def main():
         show_dashboard=not args.no_dashboard,
         enable_gui_panels=args.show_gui_panels,
         checkpoint=args.checkpoint,
+        font=args.font,
     )
     playground.run()
 
