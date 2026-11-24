@@ -522,9 +522,22 @@ class Visualizer:
             cv2.line(canvas, (t_x, col_y1 + 76), (t_x, col_y1 + 94), (0, 255, 255), 2)
 
             # Friction Angle & Margin Card
-            cv2.rectangle(canvas, (c3_x1 + 14, col_y1 + 124), (c3_x2 - 14, col_y1 + 152), (32, 45, 28) if fc_status else (45, 30, 30), -1)
-            cv2.rectangle(canvas, (c3_x1 + 14, col_y1 + 124), (c3_x2 - 14, col_y1 + 152), self.PAL_GREEN if fc_status else self.PAL_RED, 1, cv2.LINE_AA)
-            fc_text = f"VERDICT: [FORCE CLOSURE ACHIEVED] (Safety Margin: {margin_pct:.1f}%)" if fc_status else "VERDICT: [SLIP WARNING: EXCESSIVE SHEAR]"
+            is_standby = (fn_val < 5.0)
+            if is_standby:
+                card_bg = (38, 32, 28)
+                card_border = (22, 224, 234)
+                fc_text = "STATUS: [STANDBY — AWAITING PHYSICAL CONTACT]"
+            elif fc_status:
+                card_bg = (32, 45, 28)
+                card_border = self.PAL_GREEN
+                fc_text = f"VERDICT: [FORCE CLOSURE ACHIEVED] (Safety Margin: {margin_pct:.1f}%)"
+            else:
+                card_bg = (45, 30, 30)
+                card_border = self.PAL_RED
+                fc_text = f"VERDICT: [SLIP WARNING: EXCESSIVE SHEAR (θ = {th_val:.1f}°)]"
+
+            cv2.rectangle(canvas, (c3_x1 + 14, col_y1 + 124), (c3_x2 - 14, col_y1 + 152), card_bg, -1)
+            cv2.rectangle(canvas, (c3_x1 + 14, col_y1 + 124), (c3_x2 - 14, col_y1 + 152), card_border, 1, cv2.LINE_AA)
 
             # Section B: 7-DOF Actuator Torques
             cv2.line(canvas, (c3_x1 + 14, col_y1 + 168), (c3_x2 - 14, col_y1 + 168), self.PAL_BORDER, 1)
@@ -688,10 +701,15 @@ class Visualizer:
         has_force = bool(force_snapshot and (force_snapshot.get("normal_force", 0) > 0 or force_snapshot.get("mean_fn", 0) > 0 or force_snapshot.get("joint_torques")))
         if has_force:
             draw.text((c3_x1 + 14, col_y1 + 46), "Contact Diagnostics (Coulomb Friction Formulation):", font=f_card_bold, fill=(255, 255, 255))
-            draw.text((c3_x1 + 14, col_y1 + 66), f"F_normal: {fn_val:.1f} N  (Left: {fn_l:.1f} N | Right: {fn_r:.1f} N)", font=f_card_bold, fill=(0, 255, 140))
-            draw.text((c3_x1 + 14, col_y1 + 104), f"Friction Angle: θ = {th_val:.1f}° (Limit: 54.5° for μ=1.4)", font=f_card_reg, fill=(240, 240, 245))
-            fc_col = (0, 255, 140) if fc_status else (255, 70, 70)
-            draw.text((c3_x1 + 22, col_y1 + 130), fc_text, font=f_card_bold, fill=fc_col)
+            if is_standby:
+                draw.text((c3_x1 + 14, col_y1 + 66), "F_normal: 0.0 N  (Gripper Disengaged / Zero Load)", font=f_card_bold, fill=(180, 190, 200))
+                draw.text((c3_x1 + 14, col_y1 + 104), "Friction Angle: θ = 0.0° (Limit: 54.5° for μ=1.4)", font=f_card_reg, fill=(180, 190, 200))
+                draw.text((c3_x1 + 22, col_y1 + 130), fc_text, font=f_card_bold, fill=(22, 224, 234))
+            else:
+                draw.text((c3_x1 + 14, col_y1 + 66), f"F_normal: {fn_val:.1f} N  (Left: {fn_l:.1f} N | Right: {fn_r:.1f} N)", font=f_card_bold, fill=(0, 255, 140) if fc_status else (255, 184, 48))
+                draw.text((c3_x1 + 14, col_y1 + 104), f"Friction Angle: θ = {th_val:.1f}° (Limit: 54.5° for μ=1.4)", font=f_card_reg, fill=(240, 240, 245))
+                fc_col = (0, 255, 140) if fc_status else (255, 70, 70)
+                draw.text((c3_x1 + 22, col_y1 + 130), fc_text, font=f_card_bold, fill=fc_col)
 
             draw.text((c3_x1 + 14, col_y1 + 176), "Franka Panda 7-DOF Actuator Torques (Motor Effort):", font=f_card_bold, fill=(22, 224, 234))
             for idx, (j_name, limit, note) in enumerate(joint_specs):
