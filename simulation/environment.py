@@ -130,15 +130,26 @@ class GraspingEnvironment:
         )
 
         # 4. Collection Drop Tray at [0.45, 0.45, table_z]
-        # Scaled to 0.4 so it remains outside the overhead camera FOV while within robot reach
+        # Scaled to 0.45 with high-friction anti-bounce dynamics and physical retention collar
         try:
             self.tray_id = p.loadURDF(
                 "tray/traybox.urdf",
                 [0.45, 0.45, self.table_top_z],
-                globalScaling=0.40,
+                globalScaling=0.45,
                 useFixedBase=True
             )
-            p.changeVisualShape(self.tray_id, -1, rgbaColor=[0.28, 0.30, 0.34, 1.0])
+            p.changeVisualShape(self.tray_id, -1, rgbaColor=[0.24, 0.26, 0.30, 1.0])
+            # Apply high friction and zero restitution (no bounce) to absorb kinetic impact
+            p.changeDynamics(
+                self.tray_id, -1,
+                lateralFriction=2.0,
+                spinningFriction=0.1,
+                rollingFriction=0.05,
+                restitution=0.0,
+                contactDamping=200.0,
+                contactStiffness=50000.0
+            )
+            self._create_tray_retaining_walls(center=(0.45, 0.45), half_size=0.135, height=0.09)
         except Exception:
             self.tray_id = None
 
@@ -256,6 +267,31 @@ class GraspingEnvironment:
         # 6. Drop Tray Outfeed Chute / Staging Ramp
         vis_chute = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.12, 0.18, 0.015], rgbaColor=[0.22, 0.24, 0.28, 1.0])
         p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_chute, basePosition=[0.45, 0.65, 0.10])
+
+    def _create_tray_retaining_walls(self, center=(0.45, 0.45), half_size=0.135, height=0.09):
+        """Creates physical retaining collar around the tray perimeter to prevent objects from spilling out."""
+        cx, cy = center
+        z_mid = self.table_top_z + height / 2.0
+        wall_thick = 0.008
+
+        # 4 perimeter walls [North, South, East, West]
+        configs = [
+            ([cx, cy + half_size, z_mid], [half_size + wall_thick, wall_thick, height / 2.0]),  # +Y
+            ([cx, cy - half_size, z_mid], [half_size + wall_thick, wall_thick, height / 2.0]),  # -Y
+            ([cx + half_size, cy, z_mid], [wall_thick, half_size, height / 2.0]),                # +X
+            ([cx - half_size, cy, z_mid], [wall_thick, half_size, height / 2.0]),                # -X
+        ]
+
+        for pos, half_ext in configs:
+            col_id = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_ext)
+            vis_id = p.createVisualShape(p.GEOM_BOX, halfExtents=half_ext, rgbaColor=[0.24, 0.26, 0.30, 0.7])
+            wall_id = p.createMultiBody(
+                baseMass=0.0,
+                baseCollisionShapeIndex=col_id,
+                baseVisualShapeIndex=vis_id,
+                basePosition=pos
+            )
+            p.changeDynamics(wall_id, -1, lateralFriction=1.5, restitution=0.0)
 
     def _draw_workspace_bounds(self):
         """Draws crisp accent border lines around active picking workspace and safety perimeter."""

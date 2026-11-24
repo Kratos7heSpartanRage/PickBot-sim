@@ -59,7 +59,7 @@ class InteractivePlayground:
         print(f"[2/3] Loading GG-CNN Perception Model: {ckpt}")
         self.detector = GraspDetector(checkpoint_path=ckpt)
         self.visualizer = Visualizer(font_family=self.font_family)
-        self.executor = GraspExecutor(self.env.robot, tray_pos=(0.45, 0.45, 0.22))
+        self.executor = GraspExecutor(self.env.robot, tray_pos=(0.45, 0.45, 0.13))
 
         # 3. Spawn initial calibrated scene
         print(f"[3/3] Spawning {self.num_objects} calibrated objects ({self.batch.upper()}) in workspace...")
@@ -271,13 +271,13 @@ class InteractivePlayground:
     def _draw_tray_marker(self):
         """Draws a visual boundary box around the collection drop tray."""
         tx, ty, tz = 0.45, 0.45, 0.002
-        half_w = 0.11
+        half_w = 0.135
         p.addUserDebugLine([tx - half_w, ty - half_w, tz], [tx + half_w, ty - half_w, tz], [0.95, 0.78, 0.10], 2.0)
         p.addUserDebugLine([tx + half_w, ty - half_w, tz], [tx + half_w, ty + half_w, tz], [0.95, 0.78, 0.10], 2.0)
         p.addUserDebugLine([tx + half_w, ty + half_w, tz], [tx - half_w, ty + half_w, tz], [0.95, 0.78, 0.10], 2.0)
         p.addUserDebugLine([tx - half_w, ty + half_w, tz], [tx - half_w, ty - half_w, tz], [0.95, 0.78, 0.10], 2.0)
         # Position label on open table surface in front of yellow border to prevent intersecting the tray mesh
-        p.addUserDebugText("COLLECTION TRAY", [tx - 0.08, ty - 0.18, tz + 0.005], [0.95, 0.78, 0.10], 0.85)
+        p.addUserDebugText("COLLECTION TRAY", [tx - 0.08, ty - 0.20, tz + 0.005], [0.95, 0.78, 0.10], 0.85)
 
     def _update_3d_hud(self):
         """Updates the high-visibility floating 3D status HUD in PyBullet."""

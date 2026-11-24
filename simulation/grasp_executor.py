@@ -24,10 +24,42 @@ class GraspExecutor:
     Executes physical pick-and-place trajectories using Franka Panda arm and gripper,
     with real-time force closure monitoring and 7-DOF actuator torque telemetry.
     """
-    def __init__(self, robot, tray_pos=(0.45, 0.45, 0.16)):
+    def __init__(self, robot, tray_pos=(0.45, 0.45, 0.13)):
         self.robot = robot
         self.tray_pos = list(tray_pos)
         self.force_monitor = ForceClosureMonitor(robot_id=self.robot.robot_id)
+        self._drop_idx = 0
+
+    def _get_next_drop_offset(self, spawner=None):
+        """
+        Calculates an intelligent dispersed placement slot inside the collection tray.
+        Inspects how many objects are already resting in the tray to assign an empty slot,
+        preventing unstable stacking towers and object spillage.
+        """
+        offsets = [
+            ( 0.00,  0.00),   # Slot 0: Center
+            (-0.045, -0.045), # Slot 1: Back-Left
+            ( 0.045, -0.045), # Slot 2: Back-Right
+            (-0.045,  0.045), # Slot 3: Front-Left
+            ( 0.045,  0.045), # Slot 4: Front-Right
+            ( 0.00,  -0.050), # Slot 5: Back-Center
+            ( 0.00,   0.050), # Slot 6: Front-Center
+            (-0.050,  0.00),  # Slot 7: Left-Center
+        ]
+        if spawner is not None:
+            tray_count = 0
+            for obj in spawner.object_data:
+                try:
+                    pos, _ = p.getBasePositionAndOrientation(obj["id"])
+                    if pos[1] > 0.30 and 0.30 <= pos[0] <= 0.60:
+                        tray_count += 1
+                except Exception:
+                    pass
+            idx = tray_count % len(offsets)
+        else:
+            idx = self._drop_idx % len(offsets)
+            self._drop_idx += 1
+        return offsets[idx]
 
     def execute_pick_and_place(self, grasp, spawner=None, save_plot=True):
         """
@@ -119,20 +151,37 @@ class GraspExecutor:
         if lifted_obj is not None or num_contacts > 0:
             obj_name = lifted_obj['name'] if lifted_obj else "Object"
             print(f"  Result: Physical Grasp Confirmed! ({obj_name} lifted)")
-            print(f"  Phase 5: Transfer  -> Moving to tray [{self.tray_pos[0]:.2f}, {self.tray_pos[1]:.2f}, {self.tray_pos[2]:.2f}]...")
+
+            # Distributed Palletizing Drop Slot Calculation:
+            # Places consecutive objects across distinct floor slots to prevent unstable stacking towers
+            drop_offset = self._get_next_drop_offset(spawner)
+            slot_x = self.tray_pos[0] + drop_offset[0]
+            slot_y = self.tray_pos[1] + drop_offset[1]
+            drop_z = 0.13  # Gentle release height (~2 cm above tray floor)
+            transit_waypoint = [slot_x, slot_y, 0.22]
+
+            print(f"  Phase 5: Transfer  -> Moving to tray slot [{slot_x:.2f}, {slot_y:.2f}, {drop_z:.2f}]...")
             self.force_monitor.sample("Transfer")
-            self.robot.move_to_cartesian(self.tray_pos, target_yaw=0.0, steps=120,
+            # Move via high waypoint to safely clear obstacles and tray perimeter
+            self.robot.move_to_cartesian(transit_waypoint, target_yaw=0.0, steps=80,
                                          keep_gripper_closed=True, grip_force=120.0)
-            for _ in range(20):
+            # Descend gently to designated drop slot
+            self.robot.move_to_cartesian([slot_x, slot_y, drop_z], target_yaw=0.0, steps=45,
+                                         keep_gripper_closed=True, grip_force=120.0)
+            for _ in range(15):
                 p.stepSimulation()
             self.force_monitor.sample("Transfer")
 
-            print("  Phase 6: Drop      -> Opening gripper over tray...")
+            print("  Phase 6: Drop      -> Opening gripper gently over tray slot...")
             self.force_monitor.sample("Drop")
-            self.robot.open_gripper(target_pos=0.04, force=40.0, steps=60)
-            for _ in range(30):
+            self.robot.open_gripper(target_pos=0.04, force=40.0, steps=40)
+            for _ in range(25):
                 p.stepSimulation()
             self.force_monitor.sample("Drop")
+
+            # Post-drop clearance: retract vertically before home return to prevent clipping objects
+            self.robot.move_to_cartesian(transit_waypoint, target_yaw=0.0, steps=40,
+                                         keep_gripper_closed=False)
             success = True
         else:
             print("  Result: MISS - object not engaged by gripper.")
