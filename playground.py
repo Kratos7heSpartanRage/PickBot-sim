@@ -461,8 +461,14 @@ class InteractivePlayground:
             rgb, depth, camera=self.env.camera, top_k=5
         )
 
-        # Filter grasps to ensure they strictly lie on the active picking table (Z < 0.12m)
-        valid_grasps = [g for g in grasps if g.world_coords is not None and g.world_coords[2] < 0.12]
+        # Filter grasps to ensure they strictly lie on the active picking table (Z < 0.12m, Y in [-0.21, 0.21])
+        valid_grasps = [
+            g for g in grasps
+            if g.world_coords is not None
+            and 0.28 <= g.world_coords[0] <= 0.72
+            and -0.21 <= g.world_coords[1] <= 0.21
+            and g.world_coords[2] < 0.12
+        ]
 
         self.last_grasps = valid_grasps
         if self.last_force_snapshot:
@@ -658,9 +664,12 @@ class InteractivePlayground:
         print(f"\n[Respawn] Spawning {num} new calibrated objects from set [{self.batch.upper()}]...")
         self._clear_grasp_markers()
         self.last_grasps = []
+        self.grasp_attempts = 0
+        self.successful_grasps = 0
         self.env.reset(num_objects=num, batch=self.batch)
         for _ in range(60):
             self.env.step()
+        self.last_force_snapshot = self.executor.force_monitor.sample("Standby")
         self.status_message = f"RESPAWNED {num} OBJECTS [{self.batch.upper()}]"
         self._update_3d_hud()
         self.render_console()

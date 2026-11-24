@@ -108,6 +108,20 @@ class GraspDetector:
         object_mask = (depth < max_depth) & (depth > min_depth)
         q_masked = q_smooth * object_mask.astype(np.float32)
 
+        # Strictly restrict to picking table workspace (X in [0.30, 0.70], Y in [-0.21, 0.21])
+        # Mask out collection tray (Y > 0.22) and exterior boundaries
+        if camera is not None:
+            u_coords = np.arange(depth.shape[1])
+            v_coords = np.arange(depth.shape[0])
+            uu, vv = np.meshgrid(u_coords, v_coords)
+            c_x, c_y = camera.K[0, 2], camera.K[1, 2]
+            f_x, f_y = camera.K[0, 0], camera.K[1, 1]
+            z_cam = depth
+            x_w = camera.camera_pos[0] + (uu - c_x) * z_cam / f_x
+            y_w = camera.camera_pos[1] - (vv - c_y) * z_cam / f_y
+            table_workspace_mask = (x_w >= 0.30) & (x_w <= 0.70) & (y_w >= -0.21) & (y_w <= 0.21)
+            q_masked = q_masked * table_workspace_mask.astype(np.float32)
+
         # Suppress image boundaries
         border = 15
         q_masked[:border, :] = 0.0
@@ -134,6 +148,9 @@ class GraspDetector:
             world_pt = None
             if camera is not None:
                 world_pt = camera.deproject_pixel_to_world(c, r, d_val)
+                # Ignore candidates outside picking workspace (e.g. collection tray Y > 0.22)
+                if not (0.28 <= world_pt[0] <= 0.72 and -0.22 <= world_pt[1] <= 0.22):
+                    continue
 
             grasps.append(Grasp(
                 center_px=(c, r),

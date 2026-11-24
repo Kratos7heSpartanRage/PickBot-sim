@@ -3,6 +3,20 @@ import cv2
 import time
 from perception.grasp_geometry import Grasp
 
+def get_table_mask(depth, camera):
+    """Generates a boolean mask strictly restricted to the picking table workspace, ignoring collection tray."""
+    if camera is None:
+        return np.ones(depth.shape, dtype=bool)
+    u_coords = np.arange(depth.shape[1])
+    v_coords = np.arange(depth.shape[0])
+    uu, vv = np.meshgrid(u_coords, v_coords)
+    c_x, c_y = camera.K[0, 2], camera.K[1, 2]
+    f_x, f_y = camera.K[0, 0], camera.K[1, 1]
+    z_cam = depth
+    x_w = camera.camera_pos[0] + (uu - c_x) * z_cam / f_x
+    y_w = camera.camera_pos[1] - (vv - c_y) * z_cam / f_y
+    return (x_w >= 0.30) & (x_w <= 0.70) & (y_w >= -0.21) & (y_w <= 0.21)
+
 class RandomGraspDetector:
     """
     Baseline 1: Random Grasp.
@@ -14,10 +28,11 @@ class RandomGraspDetector:
     def detect(self, rgb, depth, seg, camera=None):
         t_start = time.perf_counter()
 
-        # Find object pixels (seg > 1, table is 1, plane is 0)
-        obj_pixels = np.argwhere(seg > 1)
+        tbl_mask = get_table_mask(depth, camera)
+        # Find object pixels on picking table (seg > 1, table is 1, plane is 0)
+        obj_pixels = np.argwhere((seg > 1) & tbl_mask)
         if len(obj_pixels) == 0:
-            obj_pixels = np.argwhere(depth < 0.83)
+            obj_pixels = np.argwhere((depth < 0.83) & tbl_mask)
 
         if len(obj_pixels) == 0:
             return [], {'inference_time_ms': 0.1, 'top_score': 0.0}
@@ -32,6 +47,8 @@ class RandomGraspDetector:
         world_pt = None
         if camera is not None:
             world_pt = camera.deproject_pixel_to_world(u, v, depth[v, u])
+            if not (0.28 <= world_pt[0] <= 0.72 and -0.22 <= world_pt[1] <= 0.22):
+                return [], {'inference_time_ms': 0.1, 'top_score': 0.0}
 
         grasp = Grasp((u, v), angle, width, quality=quality, world_coords=world_pt)
         latency = (time.perf_counter() - t_start) * 1000.0
@@ -50,10 +67,11 @@ class CentroidGraspDetector:
     def detect(self, rgb, depth, seg, camera=None):
         t_start = time.perf_counter()
 
-        # Mask objects
-        mask = (seg > 1).astype(np.uint8)
+        tbl_mask = get_table_mask(depth, camera)
+        # Mask objects strictly on picking table
+        mask = ((seg > 1) & tbl_mask).astype(np.uint8)
         if np.sum(mask) == 0:
-            mask = (depth < 0.83).astype(np.uint8)
+            mask = ((depth < 0.83) & tbl_mask).astype(np.uint8)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
@@ -85,6 +103,8 @@ class CentroidGraspDetector:
         world_pt = None
         if camera is not None:
             world_pt = camera.deproject_pixel_to_world(u, v, depth[v_idx, u_idx])
+            if not (0.28 <= world_pt[0] <= 0.72 and -0.22 <= world_pt[1] <= 0.22):
+                return [], {'inference_time_ms': 0.2, 'top_score': 0.0}
 
         grasp = Grasp((u, v), angle, width, quality=quality, world_coords=world_pt)
         latency = (time.perf_counter() - t_start) * 1000.0
@@ -102,14 +122,15 @@ class DepthAntipodalGraspDetector:
     def detect(self, rgb, depth, seg, camera=None):
         t_start = time.perf_counter()
 
+        tbl_mask = get_table_mask(depth, camera)
         # Compute depth gradients
         d_blur = cv2.GaussianBlur(depth, (5, 5), 0)
         sobel_x = cv2.Sobel(d_blur, cv2.CV_64F, 1, 0, ksize=3)
         sobel_y = cv2.Sobel(d_blur, cv2.CV_64F, 0, 1, ksize=3)
         grad_mag = np.sqrt(sobel_x**2 + sobel_y**2)
 
-        # Threshold edges
-        edges = grad_mag > np.percentile(grad_mag, 92)
+        # Threshold edges strictly within table bounds
+        edges = (grad_mag > np.percentile(grad_mag, 92)) & tbl_mask
         edge_pts = np.argwhere(edges)
 
         if len(edge_pts) < 2:
@@ -140,6 +161,8 @@ class DepthAntipodalGraspDetector:
         world_pt = None
         if camera is not None:
             world_pt = camera.deproject_pixel_to_world(candidate_u, candidate_v, depth[v_idx, u_idx])
+            if not (0.28 <= world_pt[0] <= 0.72 and -0.22 <= world_pt[1] <= 0.22):
+                return [], {'inference_time_ms': 0.5, 'top_score': 0.0}
 
         grasp = Grasp((candidate_u, candidate_v), grasp_angle, width_px=45.0, quality=quality, world_coords=world_pt)
         latency = (time.perf_counter() - t_start) * 1000.0
