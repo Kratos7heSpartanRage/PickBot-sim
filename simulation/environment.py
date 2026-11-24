@@ -280,10 +280,10 @@ class GraspingEnvironment:
         p.addUserDebugLine([px - hx, py + hy, z_floor], [px - hx, py - hy, z_floor], lineColorRGB=yellow, lineWidth=3.0, lifeTime=0)
         p.addUserDebugText("SAFETY WORKCELL PERIMETER", [px, py - hy - 0.08, z_floor + 0.01], textColorRGB=yellow, textSize=0.85, lifeTime=0)
 
-    def reset(self, num_objects=3):
+    def reset(self, num_objects=3, batch="all"):
         """Resets robot arm to neutral tucked home pose and spawns calibrated objects."""
         self.robot.reset()
-        spawned_ids = self.spawner.spawn_random_objects(num_objects=num_objects)
+        spawned_ids = self.spawner.spawn_random_objects(num_objects=num_objects, batch=batch)
         return spawned_ids
 
     def get_observation(self):

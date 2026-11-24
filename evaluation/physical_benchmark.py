@@ -18,6 +18,7 @@ Evaluates:
 """
 import time
 import os
+import random
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -72,8 +73,11 @@ def run_physical_benchmark(num_trials=10, clutter_levels=(1, 3, 5),
 
             for trial_idx in range(num_trials):
                 # For fair comparison across methods, each trial uses the exact same randomized scene seed
+                scene_seed = 42 + trial_idx * 17 + clutter * 1000
                 for m_name, detector in methods:
-                    # Reset scene deterministically per trial
+                    # Reset scene deterministically per trial so all methods face the identical setup
+                    random.seed(scene_seed)
+                    np.random.seed(scene_seed)
                     env.reset(num_objects=clutter)
                     for _ in range(25):
                         env.step()

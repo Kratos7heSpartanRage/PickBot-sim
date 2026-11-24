@@ -31,10 +31,11 @@ from perception.visualizer import Visualizer
 class InteractivePlayground:
     """Full interactive simulation playground with PyBullet GUI + OpenCV HUD."""
 
-    def __init__(self, num_objects=3, show_dashboard=True, checkpoint=None, enable_gui_panels=False, font="dejavu"):
+    def __init__(self, num_objects=3, show_dashboard=True, checkpoint=None, enable_gui_panels=False, font="dejavu", batch="all"):
         self.show_dashboard = show_dashboard
         self.num_objects = max(1, min(8, int(round(num_objects))))
         self.batch_count = 2
+        self.batch = batch
         self.enable_gui_panels = enable_gui_panels
         self.gui_visible = enable_gui_panels
         self.console_window = "CPS Industrial Command Console"
@@ -61,8 +62,8 @@ class InteractivePlayground:
         self.executor = GraspExecutor(self.env.robot, tray_pos=(0.45, 0.45, 0.22))
 
         # 3. Spawn initial calibrated scene
-        print(f"[3/3] Spawning {self.num_objects} calibrated objects in workspace...")
-        self.env.reset(num_objects=self.num_objects)
+        print(f"[3/3] Spawning {self.num_objects} calibrated objects ({self.batch.upper()}) in workspace...")
+        self.env.reset(num_objects=self.num_objects, batch=self.batch)
         for _ in range(60):
             self.env.step()
 
@@ -295,7 +296,7 @@ class InteractivePlayground:
         rate_str = f"{100.0 * self.successful_grasps / max(1, self.grasp_attempts):.0f}%" if self.grasp_attempts > 0 else "N/A"
 
         line1 = f"Status: [{self.status_message}] | Table: {len(table_objs)} objs | Tray: {len(tray_objs)} objs"
-        line2 = f"Success: {rate_str} ({self.successful_grasps}/{self.grasp_attempts}) | Config: Spawn [{spawn_n}] | Batch [{batch_n}]"
+        line2 = f"Success: {rate_str} ({self.successful_grasps}/{self.grasp_attempts}) | Config: Spawn [{spawn_n}] | Batch [{batch_n}] | Set: [{self.batch.upper()}]"
 
         t1 = p.addUserDebugText(line1, [0.50, 0.00, 0.53], textColorRGB=[1.0, 1.0, 1.0], textSize=1.0)
         t2 = p.addUserDebugText(line2, [0.50, 0.00, 0.48], textColorRGB=[0.75, 0.85, 0.95], textSize=0.9)
@@ -347,6 +348,7 @@ class InteractivePlayground:
         print("  [Configuration & Telemetry]")
         print("    '+' / '-'          : Step Spawn Count (+1 / -1)")
         print("    ']' / '['          : Step Batch Pick Count (+1 / -1)")
+        print("    't' or 'T'         : Cycle Object Catalog Batch (all -> batch1 -> batch2)")
         print("    'g' or 'G'         : Toggle PyBullet Sidebars (Clean Studio <-> Debug Panels)")
         print("    'q' or [Esc]       : Quit Simulation")
         print()
@@ -633,22 +635,37 @@ class InteractivePlayground:
             self._clear_grasp_markers()
             self.render_console()
 
-    def respawn_objects(self, count=None):
-        """Clear scene and spawn randomized objects matching the integer count."""
+    def respawn_objects(self, count=None, batch=None):
+        """Clear scene and spawn randomized objects matching the integer count and active batch."""
+        if batch is not None:
+            self.batch = batch
         num = count if count is not None else self.num_objects
         num = max(1, min(8, int(round(num))))
         self.num_objects = num
-        print(f"\n[Respawn] Spawning {num} new calibrated objects...")
+        print(f"\n[Respawn] Spawning {num} new calibrated objects from set [{self.batch.upper()}]...")
         self._clear_grasp_markers()
         self.last_grasps = []
-        self.env.reset(num_objects=num)
+        self.env.reset(num_objects=num, batch=self.batch)
         for _ in range(60):
             self.env.step()
-        self.status_message = f"RESPAWNED {num} OBJECTS"
+        self.status_message = f"RESPAWNED {num} OBJECTS [{self.batch.upper()}]"
         self._update_3d_hud()
         self.render_console()
         obj_info = self.env.spawner.get_object_info()
         print(f"  Spawned: {', '.join(o['name'] for o in obj_info)}")
+
+    def cycle_batch(self):
+        """Cycles object library batch: all -> batch1 -> batch2 -> all, then respawns."""
+        batch_order = ["all", "batch1", "batch2"]
+        curr_idx = batch_order.index(self.batch) if self.batch in batch_order else 0
+        self.batch = batch_order[(curr_idx + 1) % len(batch_order)]
+        label_map = {
+            "all": "Full 16-Object Catalog (Batch 1 + Batch 2)",
+            "batch1": "Batch 1 Only (Primary Baseline 8 Objects)",
+            "batch2": "Batch 2 Only (Novel Geometric Variation 8 Objects)"
+        }
+        print(f"\n[Catalog] Switched active batch to: {label_map[self.batch]}")
+        self.respawn_objects()
 
     def run(self):
         """Main interactive loop."""
@@ -827,6 +844,9 @@ class InteractivePlayground:
                     self.batch_count = max(1, self.batch_count - 1)
                     self._update_3d_hud()
                     self.render_console()
+                if (ord('t') in keys and (keys[ord('t')] & p.KEY_WAS_TRIGGERED)) or \
+                   (ord('T') in keys and (keys[ord('T')] & p.KEY_WAS_TRIGGERED)):
+                    self.cycle_batch()
                 if (ord('q') in keys and (keys[ord('q')] & p.KEY_WAS_TRIGGERED)) or \
                    (ord('Q') in keys and (keys[ord('Q')] & p.KEY_WAS_TRIGGERED)):
                     print("\n[PyBullet] Quit requested by user ('q' key).")
@@ -893,6 +913,8 @@ class InteractivePlayground:
                             self.batch_count = max(1, self.batch_count - 1)
                             self._update_3d_hud()
                             self.render_console()
+                        elif key in [ord('t'), ord('T')]:
+                            self.cycle_batch()
 
                 # Refresh console at ~25-30 FPS to keep telemetry live
                 if self.show_dashboard and (now - last_console_time > 0.035):
@@ -920,6 +942,8 @@ def main():
                         help="Path to GG-CNN model weights")
     parser.add_argument("--font", type=str, default="dejavu",
                         help="Console font preset ('dejavu', 'mono', 'ubuntu', 'ubuntu_mono') or path to custom .ttf/.otf")
+    parser.add_argument("--batch", type=str, default="all", choices=["all", "batch1", "batch2"],
+                        help="Object catalog batch: 'all' (all 16 objects), 'batch1' (objects 1-8), or 'batch2' (objects 9-16 novel geometric set)")
     args = parser.parse_args()
 
     playground = InteractivePlayground(
@@ -928,6 +952,7 @@ def main():
         enable_gui_panels=args.show_gui_panels,
         checkpoint=args.checkpoint,
         font=args.font,
+        batch=args.batch,
     )
     playground.run()
 
