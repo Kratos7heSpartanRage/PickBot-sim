@@ -36,6 +36,12 @@ class FrankaPandaRobot:
         self.gripper_joints = [9, 10]
         self.ee_link_idx = 11  # panda_grasptarget
 
+        # Franka Panda arm joint limits and natural rest poses for constrained IK
+        self.arm_lower_limits = [-2.967, -1.833, -2.967, -3.142, -2.967, -0.087, -2.967]
+        self.arm_upper_limits = [ 2.967,  1.833,  2.967,  0.000,  2.967,  3.822,  2.967]
+        self.arm_joint_ranges = [u - l for l, u in zip(self.arm_lower_limits, self.arm_upper_limits)]
+        self.arm_rest_poses = [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
+
         # Calibrate finger pad contact dynamics
         for g_idx in self.gripper_joints:
             p.changeDynamics(
@@ -156,32 +162,27 @@ class FrankaPandaRobot:
             self._step()
 
     def move_to_cartesian(self, target_pos, target_yaw=0.0, steps=80,
-                          keep_gripper_closed=False, grip_force=120.0):
+                          keep_gripper_closed=False, grip_force=120.0, max_velocity=1.5):
         """
         Moves the end-effector to (target_pos, target_yaw) using Inverse Kinematics.
-        Uses seeded IK to prevent joint limit violations and singularity traps.
+        Uses constrained IK with joint limits and rest poses to guarantee valid joint branch.
         """
         target_orn = p.getQuaternionFromEuler([np.pi, 0.0, target_yaw])
-
-        # Temporarily seed IK from natural downward posture to guarantee valid joint branch
-        current_q = [p.getJointState(self.robot_id, i)[0] for i in self.arm_joints]
-        seed = list(self.downward_seed)
-        seed[6] = 0.785 + target_yaw
-        for i, q in enumerate(seed):
-            p.resetJointState(self.robot_id, i, q, targetVelocity=0.0)
+        rest_poses = list(self.arm_rest_poses)
+        rest_poses[6] = np.clip(target_yaw, -2.90, 2.90)
 
         joint_poses = p.calculateInverseKinematics(
             self.robot_id,
             self.ee_link_idx,
             target_pos,
             target_orn,
+            lowerLimits=self.arm_lower_limits,
+            upperLimits=self.arm_upper_limits,
+            jointRanges=self.arm_joint_ranges,
+            restPoses=rest_poses,
             maxNumIterations=200,
             residualThreshold=1e-5
         )
-
-        # Restore actual joint angles so physics trajectory starts from current pose
-        for i, q in enumerate(current_q):
-            p.resetJointState(self.robot_id, i, q, targetVelocity=0.0)
 
         # Apply position control to drive motors smoothly to target joint angles
         for i, j_idx in enumerate(self.arm_joints):
@@ -191,7 +192,7 @@ class FrankaPandaRobot:
                 p.POSITION_CONTROL,
                 targetPosition=joint_poses[i],
                 force=200.0,
-                maxVelocity=1.5
+                maxVelocity=max_velocity
             )
 
         if keep_gripper_closed:

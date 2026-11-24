@@ -87,11 +87,11 @@ class GraspExecutor:
         # Phase 1: Approach (Pre-grasp waypoint 15cm above target)
         # -------------------------------------------------------------
         self.force_monitor.sample("Approach")
-        approach_z = wz + 0.15
+        approach_z = max(wz + 0.15, 0.18)
         print(f"  Phase 1: Approach  -> [{wx:.3f}, {wy:.3f}, {approach_z:.3f}]")
         self.robot.open_gripper(target_pos=0.04, steps=20)
-        self.robot.move_to_cartesian([wx, wy, approach_z], target_yaw=yaw, steps=100)
-        for _ in range(20):
+        self.robot.move_to_cartesian([wx, wy, approach_z], target_yaw=yaw, steps=130)
+        for _ in range(15):
             p.stepSimulation()
         self.force_monitor.sample("Approach")
 
@@ -99,9 +99,11 @@ class GraspExecutor:
         # Phase 2: Descend (Enclose object between finger pads)
         # -------------------------------------------------------------
         self.force_monitor.sample("Descend")
-        grasp_z = max(0.012, wz - 0.016)
+        # Calibrated grasp height: guarantees fingers reach full vertical profile
+        # of low-profile objects (down to table plane at 0.015m) without crashing into the table
+        grasp_z = max(0.014, min(wz - 0.008, 0.022))
         print(f"  Phase 2: Descend   -> [{wx:.3f}, {wy:.3f}, {grasp_z:.3f}]")
-        self.robot.move_to_cartesian([wx, wy, grasp_z], target_yaw=yaw, steps=100)
+        self.robot.move_to_cartesian([wx, wy, grasp_z], target_yaw=yaw, steps=110)
         for _ in range(20):
             p.stepSimulation()
         self.force_monitor.sample("Descend")
@@ -111,7 +113,7 @@ class GraspExecutor:
         # -------------------------------------------------------------
         print("  Phase 3: Grip      -> Clamping fingers (force=120N)...")
         self.robot.close_gripper(force=120.0, target_pos=0.0, steps=80)
-        for _ in range(15):
+        for _ in range(20):
             p.stepSimulation()
 
         snap_grip = self.force_monitor.sample("Grip")
@@ -120,36 +122,42 @@ class GraspExecutor:
         print(f"  Telemetry: {num_contacts} active contact points detected.")
 
         # -------------------------------------------------------------
-        # Phase 4: Lift (Elevate 25cm with active grip retention)
+        # Phase 4: Smooth 2-Stage Lift (Gentle breakout -> full elevation)
         # -------------------------------------------------------------
-        lift_z = wz + 0.25
+        # 4a: Gentle breakout to +5cm breaks table stiction smoothly without acceleration jerk
+        breakout_z = grasp_z + 0.05
+        self.robot.move_to_cartesian([wx, wy, breakout_z], target_yaw=yaw, steps=45,
+                                     keep_gripper_closed=True, grip_force=120.0, max_velocity=0.8)
+        # 4b: Full elevation to carry height
+        lift_z = max(wz + 0.25, 0.26)
         print(f"  Phase 4: Lift      -> Elevating to z={lift_z:.3f}m...")
-        self.robot.move_to_cartesian([wx, wy, lift_z], target_yaw=yaw, steps=120,
-                                     keep_gripper_closed=True, grip_force=120.0)
-        for _ in range(30):
+        self.robot.move_to_cartesian([wx, wy, lift_z], target_yaw=yaw, steps=80,
+                                     keep_gripper_closed=True, grip_force=120.0, max_velocity=1.5)
+        for _ in range(25):
             p.stepSimulation()
 
         # Sample and report contact dynamics during lift
         snap_lift = self.force_monitor.sample("Lift")
         self.force_monitor.print_telemetry_report(snap_lift)
 
-        # Verify physical lift success (check if object was elevated above 8cm)
+        # STRICT Physical Lift Verification:
+        # Check if an actual object was elevated above 7cm off the table
         lifted_obj = None
         if spawner is not None:
             for obj in spawner.object_data:
                 try:
                     pos, _ = p.getBasePositionAndOrientation(obj["id"])
-                    if pos[2] > 0.08:
+                    if pos[2] > 0.07:  # Truly elevated in the air
                         lifted_obj = obj
                         break
                 except Exception:
                     pass
 
         # -------------------------------------------------------------
-        # Phase 5: Transfer & Drop into Collection Tray
+        # Phase 5: Transfer & Drop into Collection Tray (ONLY if object was actually lifted!)
         # -------------------------------------------------------------
-        if lifted_obj is not None or num_contacts > 0:
-            obj_name = lifted_obj['name'] if lifted_obj else "Object"
+        if lifted_obj is not None:
+            obj_name = lifted_obj['name']
             print(f"  Result: Physical Grasp Confirmed! ({obj_name} lifted)")
 
             # Distributed Palletizing Drop Slot Calculation:
@@ -175,16 +183,25 @@ class GraspExecutor:
             print("  Phase 6: Drop      -> Opening gripper gently over tray slot...")
             self.force_monitor.sample("Drop")
             self.robot.open_gripper(target_pos=0.04, force=40.0, steps=40)
-            for _ in range(25):
+            for _ in range(30):
                 p.stepSimulation()
             self.force_monitor.sample("Drop")
 
             # Post-drop clearance: retract vertically before home return to prevent clipping objects
             self.robot.move_to_cartesian(transit_waypoint, target_yaw=0.0, steps=40,
                                          keep_gripper_closed=False)
-            success = True
+
+            # Strict Post-Drop Delivery Verification:
+            pos_after, _ = p.getBasePositionAndOrientation(lifted_obj["id"])
+            in_tray = (pos_after[1] > 0.30 and 0.30 <= pos_after[0] <= 0.60 and pos_after[2] > -0.01)
+            if in_tray:
+                print(f"  Result: Successfully deposited {obj_name} into tray.")
+                success = True
+            else:
+                print(f"  Result: DELIVERY FAILED - {obj_name} dropped outside tray basin.")
+                success = False
         else:
-            print("  Result: MISS - object not engaged by gripper.")
+            print("  Result: GRASP MISSED - Object not secured in fingers.")
             success = False
 
         # -------------------------------------------------------------
