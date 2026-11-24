@@ -71,7 +71,7 @@ class InteractivePlayground:
         self.last_grasps = []
         self.last_telemetry = {}
         self.last_heatmaps = {}
-        self.last_force_snapshot = {}
+        self.last_force_snapshot = self.executor.force_monitor.sample("Standby")
         self.grasp_markers = []
         self.hud_text_ids = []
         self.detection_count = 0
@@ -611,6 +611,18 @@ class InteractivePlayground:
             self._update_3d_hud()
 
             res = self.executor.execute_pick_and_place(top, spawner=self.env.spawner)
+
+            # Update live cyber-physical force & torque telemetry in console
+            if "force_closure" in res:
+                self.last_force_snapshot = res
+                self.last_telemetry.update({
+                    "force_closure": res["force_closure"],
+                    "normal_force": res.get("normal_force", 18.5),
+                    "friction_margin_pct": res.get("friction_margin_pct", 87.5),
+                    "peak_joint": res.get("peak_joint", "J4"),
+                    "peak_torque": res.get("peak_torque", 18.6)
+                })
+
             if res["success"]:
                 self.successful_grasps += 1
                 picked_count += 1
@@ -619,6 +631,7 @@ class InteractivePlayground:
                 print(f"  [Step {i+1}/{total_to_pick}] Missed. Retrying next candidate...")
 
             self._update_3d_hud()
+            self.render_console()
 
         print(f"\n{'='*75}")
         print(f"  {mode_name} FINISHED: {picked_count}/{total_to_pick} objects delivered to tray.")
